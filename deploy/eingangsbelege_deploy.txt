@@ -146,18 +146,30 @@ function verarbeiteEineDatei(datei, sheet, artikelSheet) {
   // aufzusplitten. Wird nur eingetragen, wenn mindestens zwei plausible
   // Artikelzeilen gefunden wurden - bei Rechnungen mit nur einer Position
   // bleibt es bei der einen Zeile in der Hauptliste.
+  // Zusätzliche Plausibilitätsprüfung: die Summe der erkannten Artikel-
+  // Bruttobeträge sollte grob zum erkannten Rechnungsbetrag passen (zwischen
+  // der Hälfte und dem 1,5-fachen). Weicht sie stark ab, deutet das auf eine
+  // fehlgeschlagene Zeilenzuordnung hin (z. B. bei OCR-Texten, die Tabellen
+  // spaltenweise statt zeilenweise ausgeben) - dann lieber gar nicht erst
+  // unbrauchbare Artikelzeilen anlegen.
   var artikel = erkenneArtikel(text);
   if (artikel.length >= 2) {
-    artikel.forEach(function (a) {
-      artikelSheet.appendRow([
-        belegId,
-        a.bezeichnung,
-        a.menge,
-        a.brutto,
-        a.netto !== null ? a.netto : '(bitte prüfen)',
-        kategorisiereArtikel(a.bezeichnung)
-      ]);
-    });
+    var summeBrutto = artikel.reduce(function (s, a) { return s + (a.brutto || 0); }, 0);
+    var plausibel = erkannt.betrag ? (summeBrutto >= erkannt.betrag * 0.5 && summeBrutto <= erkannt.betrag * 1.5) : true;
+    if (plausibel) {
+      artikel.forEach(function (a) {
+        artikelSheet.appendRow([
+          belegId,
+          a.bezeichnung,
+          a.menge,
+          a.brutto,
+          a.netto !== null ? a.netto : '(bitte prüfen)',
+          kategorisiereArtikel(a.bezeichnung)
+        ]);
+      });
+    } else {
+      Logger.log('Artikel-Aufsplittung für ' + belegId + ' wirkte unplausibel (Summe Artikel ' + summeBrutto + ' vs. Rechnungsbetrag ' + erkannt.betrag + ') - übersprungen, bitte Originalbeleg manuell prüfen.');
+    }
   }
 }
 
@@ -198,9 +210,12 @@ function erkenneFelder(text) {
     ergebnis.unsicher = true;
   }
 
-  // Betrag: Zeile mit "Gesamt"/"Summe"/"Betrag"/"Total" gefolgt von einer Zahl,
-  // sonst der größte gefundene Geldbetrag im Text.
-  var betragZeile = text.match(/(?:Gesamtbetrag|Gesamtsumme|Gesamt|Summe|Betrag|Total)[^\d]{0,15}(\d{1,3}(?:[.,]\d{3})*[.,]\d{2})/i);
+  // Betrag: Zeile mit "Gesamtbetrag"/"Gesamtsumme"/"Summe"/"Total" gefolgt von
+  // einer Zahl, sonst der größte gefundene Geldbetrag im Text. "Gesamt" wird
+  // NICHT als bloßes Präfix von "Gesamtpreis" gewertet - das ist bei
+  // Sammelrechnungen oft nur der Positions-Zwischenpreis, nicht die Endsumme
+  // (führte z. B. bei der Seefried-Rechnung zu einem falschen Treffer).
+  var betragZeile = text.match(/(?:Gesamtbetrag|Gesamtsumme|Rechnungsbetrag|Endbetrag|Zahlbetrag|zu\s*zahlen(?:der\s*Betrag)?|Gesamt(?!s?preis)|Summe|Total)[^\d]{0,15}(\d{1,3}(?:[.,]\d{3})*[.,]\d{2})/i);
   if (betragZeile) {
     ergebnis.betrag = parseGeldbetrag(betragZeile[1]);
   } else {
@@ -215,8 +230,19 @@ function erkenneFelder(text) {
 
   // Lieferant: erste nicht-leere Zeile des Textes (meist der Firmenname im
   // Briefkopf) - grobe Heuristik, im Zweifel manuell in der Liste korrigieren.
+  // Zeilen, die erkennbar nur Beleg-/Rechnungsnummer oder ein reines Datum
+  // sind (häufig die erste OCR-Zeile bei Kassenbons), werden dabei
+  // übersprungen, damit nicht z. B. "Beleg-Nr. 6290/023/00002 ..." als
+  // Lieferantenname landet.
   var zeilen = text.split('\n').map(function (z) { return z.trim(); }).filter(function (z) { return z.length > 1; });
-  if (zeilen.length) {
+  var lieferantKandidaten = zeilen.filter(function (z) {
+    return !/^(beleg-?nr\.?|rechnung(s-?nr\.?|snummer)?|quittung|kassenbon|bon-?nr\.?)\b/i.test(z) &&
+      !/^\d{1,2}[.\/]\d{1,2}[.\/]\d{2,4}/.test(z) &&
+      !/^\d+[\/\-]\d+/.test(z);
+  });
+  if (lieferantKandidaten.length) {
+    ergebnis.lieferant = lieferantKandidaten[0].substring(0, 60);
+  } else if (zeilen.length) {
     ergebnis.lieferant = zeilen[0].substring(0, 60);
   } else {
     ergebnis.unsicher = true;
@@ -247,9 +273,15 @@ function erkenneArtikel(text) {
     if (!match) continue;
 
     var bezeichnung = match[2].trim().replace(/\s{2,}/g, ' ');
-    // Zu kurze oder rein numerische "Bezeichnungen" sind meist keine echten
-    // Artikelnamen (z. B. Artikelnummern-Zeilen) - dann überspringen.
-    if (bezeichnung.length < 3 || /^\d+$/.test(bezeichnung)) continue;
+    // Zu kurze, rein numerische oder wie ein Geldbetrag aussehende
+    // "Bezeichnungen" sind meist keine echten Artikelnamen (z. B.
+    // Artikelnummern- oder verrutschte Summenzeilen) - dann überspringen.
+    // Zusätzlich: eine Bezeichnung sollte mindestens ein zusammenhängendes
+    // Wort mit 4+ Buchstaben enthalten, sonst ist es meist nur ein
+    // OCR-Fragment (z. B. abgeschnittenes "...ont.)").
+    if (bezeichnung.length < 3) continue;
+    if (/^[\d.,\s€]+$/.test(bezeichnung)) continue;
+    if (!/[a-zA-ZäöüÄÖÜß]{4,}/.test(bezeichnung)) continue;
 
     var menge = match[1] ? Number(match[1]) : 1;
     var brutto = parseGeldbetrag(match[3]);

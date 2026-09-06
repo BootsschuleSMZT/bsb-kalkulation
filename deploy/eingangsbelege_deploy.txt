@@ -12,14 +12,17 @@
  * Beleg-ID (z. B. ER-2026-0001) als interne Referenznummer, unabhängig
  * von der Rechnungsnummer des Lieferanten.
  *
- * Enthält Sammelrechnungen (z. B. Amazon) mehrere Artikel, wird
- * zusätzlich versucht, diese einzeln zu erkennen und in das
- * Tabellenblatt "Artikelpositionen" einzutragen (Bezeichnung, Menge,
- * Brutto, Netto, Kategorie) - verknüpft über die Beleg-ID. Das ist eine
- * Hilfestellung per Texterkennung, keine Buchhaltungssoftware: unsichere
- * oder nicht gefundene Werte (insbesondere Netto, wenn nicht explizit
- * auf der Rechnung ausgewiesen) werden als "(bitte prüfen)" markiert
- * und sollten kurz gegengeprüft werden.
+ * Zusätzlich wird versucht, die gekauften Artikel zu erkennen (auch bei nur
+ * einer Position, z. B. einem einzelnen Amazon-Artikel) und in das
+ * Tabellenblatt "Artikelpositionen" einzutragen (Datum, Lieferant,
+ * Bezeichnung, Menge, Brutto, Netto, Kategorie, Link zur Rechnung) - so
+ * lässt sich später nach dem gekauften Gegenstand suchen (z. B.
+ * "Sekundenkleber"), ohne die zugehörige Rechnung oder Beleg-ID zu kennen
+ * (siehe auch das Tabellenblatt "Suche"). Das ist eine Hilfestellung per
+ * Texterkennung, keine Buchhaltungssoftware: unsichere oder nicht gefundene
+ * Werte (insbesondere Netto, wenn nicht explizit auf der Rechnung
+ * ausgewiesen) werden als "(bitte prüfen)" markiert und sollten kurz
+ * gegengeprüft werden.
  *
  * WICHTIG: Damit die OCR-Texterkennung funktioniert, muss im Skript-Editor
  * einmalig unter "Dienste" (das "+" links neben "Dateien") der Dienst
@@ -142,35 +145,53 @@ function verarbeiteEineDatei(datei, sheet, artikelSheet) {
     erkannt.unsicher ? 'automatisch erfasst – bitte kurz prüfen' : 'automatisch erfasst'
   ]);
 
-  // Versuch, Sammelrechnungen (z. B. Amazon) in einzelne Artikel
-  // aufzusplitten. Wird nur eingetragen, wenn mindestens zwei plausible
-  // Artikelzeilen gefunden wurden - bei Rechnungen mit nur einer Position
-  // bleibt es bei der einen Zeile in der Hauptliste.
-  // Zusätzliche Plausibilitätsprüfung: die Summe der erkannten Artikel-
+  // Versuch, gekaufte Artikel aus dem Beleg herauszulesen - auch bei nur
+  // einer Position (z. B. ein einzelner Amazon-Artikel), damit man später
+  // in der "Artikelpositionen"-Tabelle nach dem gekauften Gegenstand suchen
+  // kann (z. B. "Sekundenkleber"), ohne die zugehörige Rechnung zu kennen.
+  // Bei zwei oder mehr erkannten Positionen wird zusätzlich eine
+  // Plausibilitätsprüfung gemacht: die Summe der erkannten Artikel-
   // Bruttobeträge sollte grob zum erkannten Rechnungsbetrag passen (zwischen
   // der Hälfte und dem 1,5-fachen). Weicht sie stark ab, deutet das auf eine
   // fehlgeschlagene Zeilenzuordnung hin (z. B. bei OCR-Texten, die Tabellen
   // spaltenweise statt zeilenweise ausgeben) - dann lieber gar nicht erst
-  // unbrauchbare Artikelzeilen anlegen.
+  // unbrauchbare Artikelzeilen anlegen. Bei nur einer Position ist dieses
+  // Risiko sehr gering (kann z. B. durch Versandkosten leicht vom
+  // Gesamtbetrag abweichen), daher wird dort ohne diese Prüfung eingetragen.
   var artikel = erkenneArtikel(text);
-  if (artikel.length >= 2) {
+  var datumStr = erkannt.datum ? Utilities.formatDate(erkannt.datum, Session.getScriptTimeZone(), 'dd.MM.yyyy') : '(bitte prüfen)';
+  var lieferantStr = erkannt.lieferant || '(bitte prüfen)';
+  var link = datei.getUrl();
+  if (artikel.length === 1) {
+    schreibeArtikelZeilen(artikelSheet, belegId, datumStr, lieferantStr, link, artikel);
+  } else if (artikel.length >= 2) {
     var summeBrutto = artikel.reduce(function (s, a) { return s + (a.brutto || 0); }, 0);
     var plausibel = erkannt.betrag ? (summeBrutto >= erkannt.betrag * 0.5 && summeBrutto <= erkannt.betrag * 1.5) : true;
     if (plausibel) {
-      artikel.forEach(function (a) {
-        artikelSheet.appendRow([
-          belegId,
-          a.bezeichnung,
-          a.menge,
-          a.brutto,
-          a.netto !== null ? a.netto : '(bitte prüfen)',
-          kategorisiereArtikel(a.bezeichnung)
-        ]);
-      });
+      schreibeArtikelZeilen(artikelSheet, belegId, datumStr, lieferantStr, link, artikel);
     } else {
       Logger.log('Artikel-Aufsplittung für ' + belegId + ' wirkte unplausibel (Summe Artikel ' + summeBrutto + ' vs. Rechnungsbetrag ' + erkannt.betrag + ') - übersprungen, bitte Originalbeleg manuell prüfen.');
     }
   }
+}
+
+// Trägt eine oder mehrere Artikelzeilen in die "Artikelpositionen"-Tabelle
+// ein - inklusive Datum, Lieferant und Link zur Original-Rechnung, damit man
+// nach dem Artikel suchen kann, ohne die Beleg-ID oder Rechnung zu kennen.
+function schreibeArtikelZeilen(artikelSheet, belegId, datumStr, lieferantStr, link, artikel) {
+  artikel.forEach(function (a) {
+    artikelSheet.appendRow([
+      belegId,
+      datumStr,
+      lieferantStr,
+      a.bezeichnung,
+      a.menge,
+      a.brutto,
+      a.netto !== null ? a.netto : '(bitte prüfen)',
+      kategorisiereArtikel(a.bezeichnung),
+      link
+    ]);
+  });
 }
 
 // Nutzt die Drive-API (Advanced Service "Drive"), um eine temporäre
@@ -401,8 +422,8 @@ function getOrCreateArtikelSheet() {
     sheet = ss.insertSheet(ARTIKEL_SHEET_NAME);
   }
   if (sheet.getLastRow() === 0) {
-    sheet.appendRow(['Beleg-ID', 'Artikelbezeichnung', 'Menge', 'Brutto (€)', 'Netto (€)', 'Kategorie']);
-    sheet.getRange(1, 1, 1, 6).setFontWeight('bold');
+    sheet.appendRow(['Beleg-ID', 'Datum', 'Lieferant', 'Artikelbezeichnung', 'Menge', 'Brutto (€)', 'Netto (€)', 'Kategorie', 'Link']);
+    sheet.getRange(1, 1, 1, 9).setFontWeight('bold');
     sheet.setFrozenRows(1);
   }
   return sheet;

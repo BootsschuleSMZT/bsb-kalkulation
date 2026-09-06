@@ -1,0 +1,246 @@
+/**
+ * Bootsschule Bremen – Automatische Erfassung von Eingangsbelegen
+ * -----------------------------------------------------------------
+ * Läuft gebunden an das Sheet "Eingangsrechnungen-Liste" in Google Drive
+ * (Ordner "02-Buchhaltung"). Scannt regelmäßig den Ordner "Eingang" nach
+ * neuen Beleg-Fotos/Scans, liest den Text per OCR, versucht Datum,
+ * Lieferant und Betrag zu erkennen, benennt die Datei sinnvoll um,
+ * verschiebt sie in den passenden Monatsordner (02-Buchhaltung/<Jahr>/
+ * 01-Belege/<Monat>/Ausgaben) und trägt eine Zeile in die Liste ein.
+ *
+ * WICHTIG: Damit die OCR-Texterkennung funktioniert, muss im Skript-Editor
+ * einmalig unter "Dienste" (das "+" links neben "Dateien") der Dienst
+ * "Drive API" (Advanced Google Service) hinzugefügt werden.
+ *
+ * Bitte NICHTS in diesem Code ändern, außer wenn du dazu ausdrücklich
+ * angeleitet wirst.
+ */
+
+// ID des Ordners "Eingang" (hier werden neue Beleg-Fotos/Scans hochgeladen).
+var EINGANG_ORDNER_ID = '10zlbRj0Eu2vVDRps_hAhNiZTgg6PB6fL';
+
+// ID des Ordners "02-Buchhaltung" (Wurzel der Jahres-/Monatsstruktur).
+var BUCHHALTUNG_ROOT_ID = '1oWcXaW2nbhZIeiEcNLaEpIMooJPvdtaz';
+
+// Name des Tabellenblatts, in das jede erkannte Rechnung eingetragen wird.
+var LISTE_SHEET_NAME = 'Eingangsbelege';
+
+var MONATE = [
+  '01_Januar', '02_Februar', '03_März', '04_April', '05_Mai', '06_Juni',
+  '07_Juli', '08_August', '09_September', '10_Oktober', '11_November', '12_Dezember'
+];
+
+// Fügt beim Öffnen des Sheets ein eigenes Menü hinzu.
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('📥 Eingangsbelege')
+    .addItem('Jetzt verarbeiten (Eingang-Ordner scannen)', 'verarbeiteEingangsbelege')
+    .addItem('Wöchentlichen Trigger einrichten', 'installiereWoechentlichenTrigger')
+    .addToUi();
+}
+
+// Hauptfunktion: scannt den Eingang-Ordner, erkennt Datum/Lieferant/Betrag
+// per OCR, benennt die Datei um, verschiebt sie in den passenden
+// Monatsordner und trägt eine Zeile in die Liste ein.
+function verarbeiteEingangsbelege() {
+  var eingang = DriveApp.getFolderById(EINGANG_ORDNER_ID);
+  var dateien = eingang.getFiles();
+  var sheet = getOrCreateListeSheet();
+  var verarbeitet = 0;
+  var fehler = 0;
+
+  while (dateien.hasNext()) {
+    var datei = dateien.next();
+    try {
+      verarbeiteEineDatei(datei, sheet);
+      verarbeitet++;
+    } catch (e) {
+      fehler++;
+      verschiebeInFehlerOrdner(datei, String(e && e.message || e));
+    }
+  }
+
+  var meldung = verarbeitet + ' Beleg(e) verarbeitet' + (fehler > 0 ? ', ' + fehler + ' mit Fehler (siehe Ordner "Eingang/Nicht erkannt – bitte prüfen")' : '.');
+  try {
+    SpreadsheetApp.getUi().alert('Eingangsbelege', meldung, SpreadsheetApp.getUi().ButtonSet.OK);
+  } catch (e) {
+    // Kein UI-Kontext (z. B. Aufruf durch zeitgesteuerten Trigger) - dann
+    // nur protokollieren statt einen Dialog zu zeigen.
+    Logger.log(meldung);
+  }
+  return meldung;
+}
+
+function verarbeiteEineDatei(datei, sheet) {
+  var text = leseTextPerOcr(datei);
+  var erkannt = erkenneFelder(text);
+
+  var zielDatum = erkannt.datum || new Date();
+  var jahr = zielDatum.getFullYear();
+  var monatIndex = zielDatum.getMonth(); // 0-11
+
+  var neuerName = baueDateiname(erkannt, datei.getName());
+  datei.setName(neuerName);
+
+  var ausgabenOrdner = getOrCreateAusgabenOrdner(jahr, monatIndex);
+  ausgabenOrdner.addFile(datei);
+  eingangOrdnerEntfernen(datei);
+
+  sheet.appendRow([
+    erkannt.datum ? Utilities.formatDate(erkannt.datum, Session.getScriptTimeZone(), 'dd.MM.yyyy') : '(bitte prüfen)',
+    erkannt.lieferant || '(bitte prüfen)',
+    erkannt.betrag !== null ? erkannt.betrag : '(bitte prüfen)',
+    neuerName,
+    datei.getUrl(),
+    erkannt.unsicher ? 'automatisch erfasst – bitte kurz prüfen' : 'automatisch erfasst'
+  ]);
+}
+
+// Nutzt die Drive-API (Advanced Service "Drive"), um eine temporäre
+// Google-Doc-Kopie mit OCR-Text zu erzeugen, liest den Text aus und löscht
+// die temporäre Kopie wieder.
+function leseTextPerOcr(datei) {
+  var tempDoc = Drive.Files.copy(
+    { title: 'OCR_TEMP_' + datei.getName(), mimeType: MimeType.GOOGLE_DOCS },
+    datei.getId(),
+    { ocr: true, ocrLanguage: 'de' }
+  );
+  try {
+    var doc = DocumentApp.openById(tempDoc.id);
+    var text = doc.getBody().getText();
+    return text;
+  } finally {
+    DriveApp.getFileById(tempDoc.id).setTrashed(true);
+  }
+}
+
+// Sehr einfache, heuristische Erkennung von Datum/Betrag/Lieferant aus dem
+// OCR-Text. Das ersetzt keine echte Buchhaltungssoftware - bei unklaren
+// Fällen wird "unsicher" gesetzt, damit es in der Liste auffällt.
+function erkenneFelder(text) {
+  var ergebnis = { datum: null, betrag: null, lieferant: null, unsicher: false };
+
+  // Datum: erstes Vorkommen von TT.MM.JJJJ oder TT.MM.JJ
+  var datumMatch = text.match(/\b(\d{1,2})\.(\d{1,2})\.(\d{2,4})\b/);
+  if (datumMatch) {
+    var tag = Number(datumMatch[1]);
+    var monat = Number(datumMatch[2]);
+    var jahr = Number(datumMatch[3]);
+    if (jahr < 100) jahr += 2000;
+    var d = new Date(jahr, monat - 1, tag);
+    if (!isNaN(d.getTime())) ergebnis.datum = d;
+  } else {
+    ergebnis.unsicher = true;
+  }
+
+  // Betrag: Zeile mit "Gesamt"/"Summe"/"Betrag"/"Total" gefolgt von einer Zahl,
+  // sonst der größte gefundene Geldbetrag im Text.
+  var betragZeile = text.match(/(?:Gesamtbetrag|Gesamtsumme|Gesamt|Summe|Betrag|Total)[^\d]{0,15}(\d{1,3}(?:[.,]\d{3})*[.,]\d{2})/i);
+  if (betragZeile) {
+    ergebnis.betrag = parseGeldbetrag(betragZeile[1]);
+  } else {
+    var alleBetraege = text.match(/\d{1,3}(?:[.,]\d{3})*[.,]\d{2}/g);
+    if (alleBetraege && alleBetraege.length) {
+      var zahlen = alleBetraege.map(parseGeldbetrag);
+      ergebnis.betrag = Math.max.apply(null, zahlen);
+    } else {
+      ergebnis.unsicher = true;
+    }
+  }
+
+  // Lieferant: erste nicht-leere Zeile des Textes (meist der Firmenname im
+  // Briefkopf) - grobe Heuristik, im Zweifel manuell in der Liste korrigieren.
+  var zeilen = text.split('\n').map(function (z) { return z.trim(); }).filter(function (z) { return z.length > 1; });
+  if (zeilen.length) {
+    ergebnis.lieferant = zeilen[0].substring(0, 60);
+  } else {
+    ergebnis.unsicher = true;
+  }
+
+  return ergebnis;
+}
+
+function parseGeldbetrag(s) {
+  // "1.234,56" -> 1234.56 ; "12,50" -> 12.5 ; "12.50" -> 12.5
+  var bereinigt = s.replace(/\./g, function (m, offset, str) {
+    // Punkt nur entfernen, wenn er als Tausendertrenner vorkommt (mehr als
+    // 2 Ziffern danach folgen noch weitere Ziffern vor einem Komma)
+    return str.indexOf(',') > -1 ? '' : m;
+  });
+  bereinigt = bereinigt.replace(',', '.');
+  var zahl = parseFloat(bereinigt);
+  return isNaN(zahl) ? 0 : zahl;
+}
+
+function baueDateiname(erkannt, alterName) {
+  var datumStr = erkannt.datum ? Utilities.formatDate(erkannt.datum, Session.getScriptTimeZone(), 'yyyy-MM-dd') : 'ohne-Datum';
+  var lieferantStr = (erkannt.lieferant || 'Unbekannt').replace(/[\\\/:*?"<>|]/g, '').replace(/\s+/g, '-').substring(0, 40);
+  var betragStr = erkannt.betrag !== null ? String(erkannt.betrag.toFixed(2)).replace('.', ',') + '€' : 'ohne-Betrag';
+  var endung = (alterName.match(/\.[a-zA-Z0-9]+$/) || [''])[0];
+  return datumStr + '_' + lieferantStr + '_' + betragStr + endung;
+}
+
+// Legt bei Bedarf 02-Buchhaltung/<Jahr>/01-Belege/<Monat>/Ausgaben an und
+// gibt den Ordner zurück.
+function getOrCreateAusgabenOrdner(jahr, monatIndex) {
+  var root = DriveApp.getFolderById(BUCHHALTUNG_ROOT_ID);
+  var jahrOrdner = getOrCreateSubfolder(root, String(jahr));
+  var belegeOrdner = getOrCreateSubfolder(jahrOrdner, '01-Belege');
+  var monatOrdner = getOrCreateSubfolder(belegeOrdner, MONATE[monatIndex]);
+  return getOrCreateSubfolder(monatOrdner, 'Ausgaben');
+}
+
+function getOrCreateSubfolder(parent, name) {
+  var it = parent.getFoldersByName(name);
+  if (it.hasNext()) return it.next();
+  return parent.createFolder(name);
+}
+
+function eingangOrdnerEntfernen(datei) {
+  var eingang = DriveApp.getFolderById(EINGANG_ORDNER_ID);
+  eingang.removeFile(datei);
+}
+
+function verschiebeInFehlerOrdner(datei, fehlermeldung) {
+  var eingang = DriveApp.getFolderById(EINGANG_ORDNER_ID);
+  var fehlerOrdner = getOrCreateSubfolder(eingang, 'Nicht erkannt – bitte prüfen');
+  fehlerOrdner.addFile(datei);
+  eingang.removeFile(datei);
+  Logger.log('Fehler bei Datei "' + datei.getName() + '": ' + fehlermeldung);
+}
+
+function getOrCreateListeSheet() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(LISTE_SHEET_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(LISTE_SHEET_NAME);
+  }
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(['Datum', 'Lieferant', 'Betrag (€)', 'Dateiname', 'Link', 'Status']);
+    sheet.getRange(1, 1, 1, 6).setFontWeight('bold');
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
+// Richtet einen wöchentlichen Trigger ein (jeden Montag ca. 7 Uhr), der
+// verarbeiteEingangsbelege() automatisch aufruft. Vorherige Trigger dieser
+// Funktion werden zuerst entfernt, damit es nicht zu Duplikaten kommt.
+function installiereWoechentlichenTrigger() {
+  var triggers = ScriptApp.getProjectTriggers();
+  triggers.forEach(function (t) {
+    if (t.getHandlerFunction() === 'verarbeiteEingangsbelege') {
+      ScriptApp.deleteTrigger(t);
+    }
+  });
+  ScriptApp.newTrigger('verarbeiteEingangsbelege')
+    .timeBased()
+    .onWeekDay(ScriptApp.WeekDay.MONDAY)
+    .atHour(7)
+    .create();
+  try {
+    SpreadsheetApp.getUi().alert('Wöchentlicher Trigger eingerichtet: jeden Montag ca. 7 Uhr wird der Eingang-Ordner automatisch verarbeitet.');
+  } catch (e) {
+    Logger.log('Wöchentlicher Trigger eingerichtet.');
+  }
+}

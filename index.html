@@ -289,6 +289,7 @@ if (!state.ruecklagen) state.ruecklagen = [];
 if (!state.lager) state.lager = [];
 if (!state.haendler) state.haendler = [];
 if (!state.bestellungen) state.bestellungen = [];
+if (!state.entnahmen) state.entnahmen = [];
 var readOnly = false;
 var artifactApi = null;
 var downloadsApi = null;
@@ -311,6 +312,7 @@ function backfillAfterLoad(){
   if (!state.lager) state.lager = [];
   if (!state.haendler) state.haendler = [];
   if (!state.bestellungen) state.bestellungen = [];
+  if (!state.entnahmen) state.entnahmen = [];
   if (!state.meta) state.meta = {};
   if (!state.meta.ustManuell) state.meta.ustManuell = {};
   if (!state.meta.ustAbgefuehrt) state.meta.ustAbgefuehrt = {};
@@ -476,6 +478,52 @@ function sendOrderToSheets(order, msg){
     showToast('Bestellung konnte nicht verschickt werden (keine Verbindung). Bitte kurz erneut versuchen.', true);
   });
 }
+
+// Speichert den Stand wie saveToSheets(), weist die Web-App aber zusätzlich
+// an, für die Entnahme einen fortlaufend nummerierten Eigenbeleg (PDF) zu
+// erstellen und in Google Drive abzulegen (action:'entnahme'). Die
+// zurückgegebene Belegnummer/URL wird anschließend am lokalen Eintrag
+// nachgetragen und erneut gespeichert, damit sie dauerhaft im Sheet steht.
+function sendEntnahmeToSheets(entnahme, msg){
+  if (!sheetsConnected){
+    showToast(msg + ' (nicht mit Google Sheet verbunden — Beleg konnte nicht erstellt werden)', true);
+    return;
+  }
+  if (syncInFlight) return;
+  syncInFlight = true;
+  fetch(SHEETS_API_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ state: state, expectedVersion: lastServerVersion, action: 'entnahme', entnahme: entnahme })
+  }).then(function(r){ return r.json(); }).then(function(res){
+    syncInFlight = false;
+    if (res.conflict){
+      state = res.state;
+      lastServerVersion = res.version;
+      backfillAfterLoad();
+      renderAll();
+      showToast('Jemand anderes hat zwischenzeitlich gespeichert — Stand wurde aktualisiert. Die Entnahme wurde trotzdem gebucht, bitte kurz prüfen.', true);
+      return;
+    }
+    if (res.ok){
+      lastServerVersion = res.version;
+      if (res.beleg && res.beleg.ok){
+        var e = state.entnahmen.filter(function(x){return x.id===entnahme.id;})[0];
+        if (e){ e.belegnummer = res.beleg.belegnummer; e.belegUrl = res.beleg.belegUrl; }
+        renderAll();
+        saveToSheets('Beleg '+res.beleg.belegnummer+' erstellt.');
+      } else {
+        var errMsg = (res.beleg && res.beleg.error) ? res.beleg.error : 'unbekannter Fehler';
+        showToast('Bestand reduziert, aber der Eigenbeleg konnte NICHT erstellt werden: ' + errMsg + ' — bitte im Apps-Script-Editor unter „Ausführungen" prüfen (evtl. muss der Drive-/Doc-Zugriff einmalig freigegeben werden).', true);
+      }
+    } else {
+      showToast('Entnahme konnte nicht gespeichert werden. Bitte kurz erneut versuchen.', true);
+    }
+  }).catch(function(){
+    syncInFlight = false;
+    showToast('Entnahme konnte nicht gespeichert werden (keine Verbindung). Bitte kurz erneut versuchen.', true);
+  });
+}
 // Which tab is currently shown — read from whatever the shell marked active
 // on load, so a republish preserves the viewer's place instead of always
 // reopening on Dashboard. Kept in sync by activateTab().
@@ -505,7 +553,7 @@ function uid(){ return 'id' + Math.random().toString(36).slice(2,10) + Date.now(
 // hier einmalig nachgerüstet, damit jede Zeile eindeutig ansprechbar ist.
 if (!state.kurse) state.kurse = [];
 (function backfillIds(){
-  ['fixkosten','einnahmen','ausgaben','minijobber','stunden','kurse','ruecklagen','lager','haendler','bestellungen'].forEach(function(key){
+  ['fixkosten','einnahmen','ausgaben','minijobber','stunden','kurse','ruecklagen','lager','haendler','bestellungen','entnahmen'].forEach(function(key){
     (state[key]||[]).forEach(function(item){ if (!item.id) item.id = uid(); });
   });
 })();
@@ -2348,6 +2396,7 @@ function renderLager(){
       '<div class="field"><label>Kategorie</label><select name="kategorie">'+optionListWithCustom(LAGER_KATEGORIEN, LAGER_KATEGORIEN[0])+'</select></div>'+
       '<div class="field"><label>ISBN (optional, bei Literatur)</label><input type="text" name="isbn" placeholder="z. B. 978-3-..." style="width:150px;"></div>'+
       '<div class="field"><label>Verkaufspreis (€)</label><input class="num-input" type="number" min="0" step="0.01" name="preis" required></div>'+
+      '<div class="field"><label>Einkaufspreis (€, für Entnahme-Belege)</label><input class="num-input" type="number" min="0" step="0.01" name="einkaufspreis" placeholder="optional"></div>'+
       '<div class="field"><label>Aktueller Bestand</label><input class="num-input" type="number" min="0" step="1" name="bestand" value="0" required></div>'+
       '<div class="field"><label>Mindestbestand</label><input class="num-input" type="number" min="0" step="1" name="mindestbestand" value="2" required></div>'+
       '<div class="field"><label>Händler</label><select name="haendlerId">'+haendlerOptions('')+'</select></div>'+
@@ -2366,9 +2415,9 @@ function renderLager(){
   }
 
   html += '<div class="card"><h2>Produkte &amp; Bestand</h2>'+
-    '<div class="cardsub">Bestand direkt in der Tabelle anpassen (anklicken, ändern, Feld verlassen) – wird sofort gespeichert. Bei hinterlegtem Händler einfach Menge eintragen und „Bestellen" klicken – die Bestellmail geht automatisch raus.</div>'+
+    '<div class="cardsub">Bestand direkt in der Tabelle anpassen (anklicken, ändern, Feld verlassen) – wird sofort gespeichert. Bei hinterlegtem Händler einfach Menge eintragen und „Bestellen" klicken – die Bestellmail geht automatisch raus. Bei Werbeartikeln/Promo-Entnahmen „Entnahme" nutzen – erzeugt automatisch einen Eigenbeleg fürs Finanzamt und reduziert den Bestand, ohne dass eine Einnahme gebucht wird.</div>'+
     '<div class="table-wrap"><table id="tbl-lager">'+
-    '<thead><tr><th>Produkt</th><th>Kategorie</th><th>ISBN</th><th class="num">Preis</th><th class="num">Bestand</th><th class="num">Mindest.</th><th>Händler</th><th>Notiz</th><th></th><th>Bestellen</th></tr></thead>'+
+    '<thead><tr><th>Produkt</th><th>Kategorie</th><th>ISBN</th><th class="num">Preis</th><th class="num">EK</th><th class="num">Bestand</th><th class="num">Mindest.</th><th>Händler</th><th>Notiz</th><th></th><th>Bestellen</th><th>Entnahme</th></tr></thead>'+
     '<tbody></tbody></table></div></div>';
 
   html += '<div class="card"><h2>Bestellungen</h2>'+
@@ -2376,9 +2425,16 @@ function renderLager(){
     '<thead><tr><th>Datum</th><th>Produkt</th><th class="num">Menge</th><th>Händler</th><th>Status</th><th></th></tr></thead>'+
     '<tbody></tbody></table></div></div>';
 
+  html += '<div class="card"><h2>Entnahmen (Werbeartikel/Promo)</h2>'+
+    '<div class="cardsub">Unentgeltliche Abgaben aus dem Lager (Werbegeschenke, Zugaben zu Kursen, Reklamationen, Schwund) – jede Entnahme erzeugt automatisch einen fortlaufend nummerierten Eigenbeleg (PDF) in deinem Google Drive, Ordner „BSB Eigenbelege Lager".</div>'+
+    '<div class="table-wrap"><table id="tbl-entnahmen">'+
+    '<thead><tr><th>Datum</th><th>Beleg-Nr.</th><th>Produkt</th><th class="num">Menge</th><th class="num">Wert (EK)</th><th>Grund</th><th>Kurs</th><th>Beleg</th></tr></thead>'+
+    '<tbody></tbody></table></div></div>';
+
   document.getElementById('panel-lager').innerHTML = html;
   renderLagerTable();
   renderBestellungenTable();
+  renderEntnahmenTable();
   renderTagList('tags-haendler', state.haendler, function(h){return h.name+' <span class="price">'+escapeHtml(h.email)+'</span>';}, function(idx){ removeHaendler(idx); });
 
   if (!readOnly){
@@ -2387,7 +2443,7 @@ function renderLager(){
       var fd = new FormData(ev.target);
       state.lager.push({
         id: uid(), produkt: fd.get('produkt'), kategorie: fd.get('kategorie'), isbn: fd.get('isbn')||'',
-        preis: Number(fd.get('preis'))||0, bestand: Number(fd.get('bestand'))||0,
+        preis: Number(fd.get('preis'))||0, einkaufspreis: Number(fd.get('einkaufspreis'))||0, bestand: Number(fd.get('bestand'))||0,
         mindestbestand: Number(fd.get('mindestbestand'))||0, haendlerId: fd.get('haendlerId')||'',
         notiz: fd.get('notiz')||'', unterschritten: false
       });
@@ -2412,7 +2468,7 @@ function renderLagerTable(){
   var rows = state.lager.slice().sort(function(a,b){return (a.produkt||'').localeCompare(b.produkt||'');});
   var tbody = document.querySelector('#tbl-lager tbody');
   if (rows.length===0){
-    tbody.innerHTML = '<tr class="empty-row"><td colspan="10">Noch keine Produkte hinterlegt.</td></tr>';
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="12">Noch keine Produkte hinterlegt.</td></tr>';
     return;
   }
   tbody.innerHTML = rows.map(function(p){
@@ -2430,15 +2486,19 @@ function renderLagerTable(){
         bestellCell = '<span style="color:var(--ink-dim); font-size:12px;">kein Händler</span>';
       }
     }
+    var einkaufspreisCell = readOnly ? eur(p.einkaufspreis||0) : inlineEditInput(p.id, 'einkaufspreis', 'number', p.einkaufspreis||0, 'min="0" step="0.01" style="width:64px;"');
+    var entnahmeCell = readOnly ? '–' : '<button class="btn-mini" data-entnahme-lager="'+p.id+'" title="Werbeartikel/Promo aus dem Lager entnehmen, Eigenbeleg wird automatisch erstellt">Entnahme</button>';
     return '<tr><td class="wrap">'+escapeHtml(p.produkt)+'</td><td>'+escapeHtml(p.kategorie||'')+'</td>'+
       '<td class="wrap">'+escapeHtml(p.isbn||'')+'</td>'+
       '<td class="num">'+eur(p.preis)+'</td>'+
+      '<td class="num">'+einkaufspreisCell+'</td>'+
       '<td class="num">'+bestandCell+(niedrig?' <span class="badge" style="background:var(--bad-bg);color:var(--bad);">niedrig</span>':'')+'</td>'+
       '<td class="num">'+mindestCell+'</td>'+
       '<td>'+haendlerCell+'</td>'+
       '<td class="wrap">'+escapeHtml(p.notiz)+'</td>'+
       '<td>'+(readOnly?'':'<button class="del-btn" data-del-lager="'+p.id+'" title="Löschen">✕</button>')+'</td>'+
-      '<td class="nowrap">'+bestellCell+'</td></tr>';
+      '<td class="nowrap">'+bestellCell+'</td>'+
+      '<td class="nowrap">'+entnahmeCell+'</td></tr>';
   }).join('');
   tbody.querySelectorAll('.inline-edit-input').forEach(function(inp){
     inp.addEventListener('change', function(){
@@ -2487,6 +2547,83 @@ function renderLagerTable(){
       });
     });
   });
+  tbody.querySelectorAll('[data-entnahme-lager]').forEach(function(b){
+    b.addEventListener('click', function(){
+      var id = b.getAttribute('data-entnahme-lager');
+      var p = state.lager.filter(function(x){return x.id===id;})[0];
+      if (!p) return;
+      showEntnahmeForm(p);
+    });
+  });
+}
+
+/* ============================= RENDER: ENTNAHMEN (WERBEARTIKEL/PROMO) ============================= */
+var ENTNAHME_GRUENDE = ['Werbeartikel/Promo', 'Zugabe zum Kursverkauf', 'Reklamation/Ersatz', 'Verlust/Schwund', 'Sonstiges'];
+
+// Zeigt ein Formular, um eine unentgeltliche Entnahme (Werbeartikel, Zugabe
+// zu einem Kurs, Schwund etc.) zu erfassen. Reduziert bei Bestätigung sofort
+// den Lagerbestand und lässt automatisch einen fortlaufend nummerierten
+// Eigenbeleg (PDF) im Google Drive erzeugen (siehe sendEntnahmeToSheets).
+function showEntnahmeForm(p){
+  var kursOptions = '<option value="">– kein Kurs –</option>' + state.kurse.map(function(k){
+    return '<option value="'+escapeHtml(k.bezeichnung||k.nummer||'')+'">'+escapeHtml((k.nummer?k.nummer+' – ':'')+(k.bezeichnung||''))+'</option>';
+  }).join('');
+  var overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+  var box = document.createElement('div');
+  box.style.cssText = 'background:var(--surface,#fff);color:var(--ink,#111);max-width:480px;width:100%;max-height:85vh;overflow:auto;border-radius:10px;padding:20px;box-shadow:0 10px 40px rgba(0,0,0,0.3);';
+  box.innerHTML =
+    '<h3 style="margin-top:0;">Entnahme buchen: '+escapeHtml(p.produkt)+'</h3>'+
+    '<div class="field"><label>Menge</label><input class="num-input" type="number" min="1" step="1" id="entnahme-menge" value="1" style="width:100%;"></div>'+
+    '<div class="field" style="margin-top:8px;"><label>Grund</label><select id="entnahme-grund" style="width:100%;">'+ENTNAHME_GRUENDE.map(function(g){return '<option value="'+escapeHtml(g)+'">'+escapeHtml(g)+'</option>';}).join('')+'</select></div>'+
+    '<div class="field" style="margin-top:8px;"><label>Zugehöriger Kurs (optional)</label><select id="entnahme-kurs" style="width:100%;">'+kursOptions+'</select></div>'+
+    '<div class="field" style="margin-top:8px;"><label>Notiz (optional)</label><input type="text" id="entnahme-notiz" placeholder="z. B. Name Kunde" style="width:100%;"></div>'+
+    '<div style="font-size:12px;color:var(--ink-dim,#666);margin-top:10px;">Es wird automatisch ein Eigenbeleg (PDF) mit fortlaufender Belegnummer erstellt und in deinem Google Drive im Ordner „BSB Eigenbelege Lager" abgelegt.</div>'+
+    '<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px;">'+
+    '<button class="btn ghost" type="button" data-entnahme-cancel>Abbrechen</button>'+
+    '<button class="btn" type="button" data-entnahme-submit>Beleg erstellen &amp; Bestand reduzieren</button>'+
+    '</div>';
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  function close(){ document.body.removeChild(overlay); }
+  box.querySelector('[data-entnahme-cancel]').addEventListener('click', close);
+  overlay.addEventListener('click', function(ev){ if (ev.target === overlay) close(); });
+  box.querySelector('[data-entnahme-submit]').addEventListener('click', function(){
+    var menge = Number(document.getElementById('entnahme-menge').value);
+    if (!menge || menge<1){ showToast('Bitte eine Menge (mind. 1) eintragen.', true); return; }
+    if (menge > Number(p.bestand||0)){ showToast('Menge größer als aktueller Bestand ('+p.bestand+').', true); return; }
+    var grund = document.getElementById('entnahme-grund').value;
+    var kursName = document.getElementById('entnahme-kurs').value;
+    var notiz = document.getElementById('entnahme-notiz').value.trim();
+    close();
+    p.bestand = Number(p.bestand||0) - menge;
+    var entnahme = {
+      id: uid(), datum: todayISO(), lagerId: p.id, produkt: p.produkt, isbn: p.isbn||'',
+      menge: menge, ek: Number(p.einkaufspreis||0), grund: grund, kursName: kursName, notiz: notiz,
+      belegnummer: '', belegUrl: ''
+    };
+    state.entnahmen.push(entnahme);
+    renderAll();
+    sendEntnahmeToSheets(entnahme, 'Entnahme gebucht, Beleg wird erstellt ...');
+  });
+}
+
+function renderEntnahmenTable(){
+  var rows = state.entnahmen.slice().sort(function(a,b){return (b.datum||'').localeCompare(a.datum||'');});
+  var tbody = document.querySelector('#tbl-entnahmen tbody');
+  if (rows.length===0){
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="8">Noch keine Entnahmen erfasst.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(function(e){
+    var belegCell = e.belegUrl ? '<a href="'+escapeHtml(e.belegUrl)+'" target="_blank" rel="noopener">PDF öffnen</a>' :
+      (e.belegnummer ? '<span style="color:var(--ink-dim);font-size:12px;">wird erstellt ...</span>' : '<span style="color:var(--bad);font-size:12px;">fehlgeschlagen</span>');
+    return '<tr><td>'+deDate(e.datum)+'</td><td>'+escapeHtml(e.belegnummer||'–')+'</td>'+
+      '<td class="wrap">'+escapeHtml(e.produkt)+'</td><td class="num">'+e.menge+'</td>'+
+      '<td class="num">'+eur((Number(e.ek)||0)*(Number(e.menge)||0))+'</td>'+
+      '<td class="wrap">'+escapeHtml(e.grund||'')+'</td><td class="wrap">'+escapeHtml(e.kursName||'')+'</td>'+
+      '<td>'+belegCell+'</td></tr>';
+  }).join('');
 }
 
 /* ============================= RENDER: BESTELLUNGEN ============================= */

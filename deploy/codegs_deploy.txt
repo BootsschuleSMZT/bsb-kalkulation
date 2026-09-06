@@ -1,0 +1,556 @@
+/**
+ * Bootsschule Bremen – Kalkulationstool Backend
+ * ------------------------------------------------
+ * Speichert und liefert den kompletten Datenbestand des Kalkulationstools
+ * über dieses Google Sheet. Läuft als "Web-App" (siehe Einrichtungs-
+ * anleitung von Claude) und wird von der Tool-Webseite per GET (laden)
+ * und POST (speichern) angesprochen.
+ *
+ * Bitte NICHTS in diesem Code ändern, außer wenn du dazu ausdrücklich
+ * angeleitet wirst.
+ */
+
+var COLLECTIONS = ['einnahmen', 'ausgaben', 'fixkosten', 'kurse', 'minijobber', 'stunden', 'ruecklagen', 'lager', 'haendler', 'bestellungen', 'entnahmen'];
+
+// Name des Google-Drive-Ordners, in dem die automatisch erstellten
+// Eigenbelege (PDF) für Lager-Entnahmen (Werbeartikel/Promo/Zugaben)
+// abgelegt werden. Wird beim ersten Beleg automatisch angelegt, falls er
+// noch nicht existiert.
+var EIGENBELEG_ORDNER = 'BSB Eigenbelege Lager';
+var SETTINGS_KEYS = ['meta', 'standorte', 'kursarten', 'kostenkategorien'];
+
+// E-Mail-Adresse für die automatische Mindestbestand-Warnung.
+var LAGER_WARNUNG_EMAIL = 'info@bootsschule-bremen.de';
+
+// Feste Firmendaten für den Briefkopf der Bestell-E-Mails (aus dem
+// Impressum von www.bootsschule-bremen.de).
+var FIRMA = {
+  name: 'Bootsschule Bremen GmbH',
+  strasse: 'Fledermausweg 8a',
+  plz: '28865',
+  ort: 'Lilienthal',
+  telefon: '+49 151 14312077',
+  email: 'info@bootsschule-bremen.de',
+  ustId: 'DE459269699',
+  handelsregister: 'HRB 213272, Amtsgericht Walsrode',
+  geschaeftsfuehrer: 'Lars Guschke, Nicolai Wellmann',
+  ansprechpartner: 'Lars Guschke'
+};
+
+// Firmenlogo fuer den Briefkopf der Eigenbeleg-PDFs. Liegt im selben
+// GitHub-Repo wie das Kalkulationstool und wird beim Erstellen jedes
+// Belegs live per UrlFetchApp geladen (kein grosser Base64-Block im Code).
+var LOGO_URL = 'https://raw.githubusercontent.com/BootsschuleSMZT/bsb-kalkulation/main/assets/logo-bootsschule-bremen.png';
+
+// Fügt beim Öffnen des Google Sheets automatisch ein eigenes Menü "BSB
+// Kalkulation" oben in der Menüleiste hinzu (neben Datei/Bearbeiten/...).
+// Läuft von selbst jedes Mal, wenn das Sheet geöffnet/neu geladen wird —
+// nichts weiter einzurichten. Nach dem Einspielen dieser Code-Version einmal
+// das Sheet neu laden (F5), damit das Menü erscheint.
+function onOpen() {
+  SpreadsheetApp.getUi()
+    .createMenu('🛠️ BSB Kalkulation')
+    .addItem('Datenüberblick anzeigen', 'zeigeDatenueberblick')
+    .addItem('Testmail senden (info@bootsschule-bremen.de)', 'testMailversand')
+    .addItem('Test-Eigenbeleg erstellen', 'testEigenbeleg')
+    .addToUi();
+}
+
+// Zeigt eine Übersicht mit den aktuellen Datenmengen je Bereich sowie ein
+// paar wichtigen Kennzahlen (offene Bestellungen, Produkte unter Mindest-
+// bestand) — liest jedes Mal live den aktuellen Stand, ist also nie veraltet.
+function zeigeDatenueberblick() {
+  var state = readState().state;
+  var zeilen = COLLECTIONS.map(function (name) {
+    return '- ' + cap(name) + ': ' + ((state[name] || []).length);
+  }).join('\n');
+  var offeneBestellungen = (state.bestellungen || []).filter(function (b) { return b.status === 'offen'; }).length;
+  var niedrig = (state.lager || []).filter(function (p) {
+    return Number(p.mindestbestand) > 0 && Number(p.bestand) <= Number(p.mindestbestand);
+  }).length;
+  var text = zeilen +
+    '\n\nOffene Bestellungen: ' + offeneBestellungen +
+    '\nProdukte unter/auf Mindestbestand: ' + niedrig;
+  SpreadsheetApp.getUi().alert('Datenüberblick', text, SpreadsheetApp.getUi().ButtonSet.OK);
+}
+
+// EINMALIG MANUELL AUSFÜHREN, um die Mail-Berechtigung freizugeben und den
+// Versand direkt zu testen: oben im Dropdown (wo "doGet" steht) diese
+// Funktion "testMailversand" auswählen, dann auf "Ausführen" klicken. Beim
+// ersten Mal fragt Google nach Berechtigung ("Überprüfung erforderlich" ->
+// Konto auswählen -> "Erweitert" -> "Zu BSB Kalkulation (unsicher) wechseln"
+// -> "Zulassen") — das ist normal bei einem eigenen, nicht bei Google
+// eingereichten Skript. Direkt danach sollte eine Test-Mail bei
+// info@bootsschule-bremen.de ankommen (bitte auch im Spam-Ordner nachsehen).
+// WICHTIG: Nur "doGet" auszuführen reicht NICHT aus, weil doGet selbst gar
+// keine E-Mail verschickt und deshalb auch keine Mail-Berechtigung anfragt.
+function testMailversand() {
+  MailApp.sendEmail({
+    to: FIRMA.email,
+    subject: 'Testmail – Kalkulationstool Bootsschule Bremen',
+    body: 'Das ist eine Testmail, um zu prüfen, ob der Mailversand aus dem Kalkulationstool funktioniert. Wenn diese Mail ankommt, ist alles korrekt eingerichtet.',
+    name: FIRMA.name
+  });
+}
+
+// EINMALIG MANUELL AUSFÜHREN (wie testMailversand): erstellt einen
+// Test-Eigenbeleg, um die dafür nötige Google-Drive/Doc-Berechtigung
+// freizugeben. Im Dropdown oben "testEigenbeleg" auswählen, "Ausführen"
+// klicken, Berechtigung bestätigen (genau wie beim Mailversand). Danach im
+// Ausführungsprotokoll bzw. in deinem Drive-Ordner "BSB Eigenbelege Lager"
+// nachsehen, ob ein Test-PDF angekommen ist.
+function testEigenbeleg() {
+  var ergebnis = erstelleEigenbeleg({
+    produkt: 'Testprodukt', isbn: '', menge: 1, ek: 1.23,
+    grund: 'Test', kursName: '', notiz: 'Testlauf aus dem Skript-Editor'
+  });
+  Logger.log(JSON.stringify(ergebnis));
+}
+
+function doGet(e) {
+  var lock = LockService.getScriptLock();
+  lock.tryLock(5000);
+  try {
+    return jsonResponse(readState());
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function doPost(e) {
+  var lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    var body;
+    try {
+      body = JSON.parse(e.postData.contents);
+    } catch (err) {
+      return jsonResponse({ ok: false, error: 'invalid_json' });
+    }
+
+    var current = readState();
+
+    if (body.expectedVersion && body.expectedVersion !== current.version) {
+      // Jemand anderes hat zwischenzeitlich gespeichert -> Konflikt melden,
+      // NICHTS überschreiben. Die Webseite lädt dann automatisch den
+      // aktuellen Stand nach.
+      return jsonResponse({ ok: false, conflict: true, version: current.version, state: current.state });
+    }
+
+    var newState = body.state || {};
+
+    // Mindestbestand-Warnung: nur eine E-Mail verschicken, wenn ein Produkt
+    // NEU unter den Mindestbestand fällt (nicht bei jedem Speichern erneut).
+    checkLagerWarnung(current.state.lager || [], newState.lager || []);
+
+    writeState(newState);
+    var newVersion = new Date().toISOString();
+    setVersion(newVersion);
+
+    // Bestellung per Klick: zusätzlich eine formelle Bestell-E-Mail an den
+    // Händler verschicken. Das Ergebnis (erfolgreich oder Fehlermeldung) geht
+    // mit der Antwort zurück an die Webseite, damit im Zweifel eine klare
+    // Rückmeldung erscheint statt eines stillen Fehlschlags.
+    var mailResult = null;
+    if (body.action === 'order' && body.order) {
+      mailResult = sendBestellMail(body.order);
+    }
+
+    // Entnahme (Werbeartikel/Promo/Zugabe) per Klick: automatisch einen
+    // fortlaufend nummerierten Eigenbeleg (PDF) erstellen und in Google
+    // Drive ablegen. Ergebnis (Belegnummer/Link oder Fehler) geht mit der
+    // Antwort zurück, damit die Webseite es dem Nutzer anzeigen kann.
+    var belegResult = null;
+    if (body.action === 'entnahme' && body.entnahme) {
+      belegResult = erstelleEigenbeleg(body.entnahme);
+    }
+
+    var response = { ok: true, version: newVersion };
+    if (mailResult) {
+      response.mailSent = mailResult.sent;
+      if (!mailResult.sent) response.mailError = mailResult.error;
+    }
+    if (belegResult) {
+      response.beleg = belegResult;
+    }
+    return jsonResponse(response);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// Vergleicht den Lagerbestand vor und nach dem Speichern. Sobald ein Produkt
+// NEU unter (oder auf) seinen Mindestbestand fällt, wird eine einzelne
+// E-Mail mit allen betroffenen Produkten verschickt. Das "unterschritten"-
+// Flag im jeweiligen Produkt (in newLager, wird mitgespeichert) verhindert,
+// dass bei jedem weiteren Speichern erneut eine Mail rausgeht, solange der
+// Bestand weiter niedrig ist. Steigt der Bestand wieder über den Mindest-
+// bestand, wird das Flag zurückgesetzt, sodass beim nächsten Unterschreiten
+// wieder gewarnt wird.
+function checkLagerWarnung(oldLager, newLager) {
+  var neuUnterschritten = [];
+  newLager.forEach(function (p) {
+    var bestand = Number(p.bestand) || 0;
+    var mindest = Number(p.mindestbestand) || 0;
+    var niedrig = mindest > 0 && bestand <= mindest;
+    var warSchonGemeldet = !!p.unterschritten;
+    if (niedrig && !warSchonGemeldet) {
+      neuUnterschritten.push(p);
+      p.unterschritten = true;
+    } else if (!niedrig) {
+      p.unterschritten = false;
+    }
+  });
+
+  if (neuUnterschritten.length === 0) return;
+
+  var zeilen = neuUnterschritten.map(function (p) {
+    return '- ' + p.produkt + ': Bestand ' + (Number(p.bestand) || 0) + ' (Mindestbestand ' + (Number(p.mindestbestand) || 0) + ')';
+  }).join('\n');
+
+  var betreff = neuUnterschritten.length === 1
+    ? 'Lagerbestand niedrig: ' + neuUnterschritten[0].produkt
+    : 'Lagerbestand niedrig: ' + neuUnterschritten.length + ' Produkte';
+
+  var text = 'Folgende Produkte haben den Mindestbestand erreicht oder unterschritten:\n\n' +
+    zeilen +
+    '\n\nBitte bei Bedarf über die Lagerverwaltung im Kalkulationstool nachbestellen.';
+
+  try {
+    MailApp.sendEmail(LAGER_WARNUNG_EMAIL, betreff, text);
+  } catch (e) {
+    // Falls der Versand fehlschlägt (z. B. fehlende Berechtigung), soll das
+    // Speichern trotzdem nicht abbrechen — Fehler landet im Ausführungs-
+    // protokoll des Apps-Script-Editors (Ausführungen ansehen), damit er bei
+    // Bedarf dort nachvollziehbar ist.
+    Logger.log('Mindestbestand-Warnung konnte nicht verschickt werden: ' + (e && e.message || e));
+  }
+}
+
+// Verschickt eine formelle Bestell-E-Mail im Briefkopf-Stil an den Händler.
+// order = { produkt, isbn, menge, haendlerName, haendlerEmail }
+// Gibt { sent: true } bzw. { sent: false, error: '...' } zurück, statt Fehler
+// still zu verschlucken — die Webseite zeigt das Ergebnis dem Nutzer an.
+//
+// Es wird KEIN separates E-Mail-Konto benötigt: der Versand läuft über das
+// Google-Konto, dem dieses Apps-Script-Projekt gehört (also automatisch über
+// dessen Gmail/Google Workspace-Postfach — dasselbe Konto, mit dem auch das
+// Google Sheet angelegt wurde). Absendername wird auf "Bootsschule Bremen
+// GmbH" gesetzt, Antworten gehen an info@bootsschule-bremen.de, und eine
+// Kopie jeder Bestellung geht zusätzlich als CC an info@bootsschule-bremen.de
+// zur eigenen Kontrolle.
+function sendBestellMail(order) {
+  if (!order.haendlerEmail) return { sent: false, error: 'Kein Händler/keine Händler-E-Mail hinterlegt.' };
+
+  var artikelZeile = order.produkt + (order.isbn ? ' (ISBN: ' + order.isbn + ')' : '') + ' – Menge: ' + order.menge + ' Stück';
+
+  var betreff = 'Bestellung – ' + FIRMA.name;
+
+  var text =
+    'Sehr geehrte Damen und Herren,\n\n' +
+    'hiermit bestellen wir folgende Artikel:\n\n' +
+    artikelZeile + '\n\n' +
+    'Lieferadresse:\n' +
+    FIRMA.name + '\n' +
+    FIRMA.strasse + '\n' +
+    FIRMA.plz + ' ' + FIRMA.ort + '\n\n' +
+    'Rechnungsdaten:\n' +
+    'USt-IdNr.: ' + FIRMA.ustId + '\n' +
+    'Handelsregister: ' + FIRMA.handelsregister + '\n' +
+    'Geschäftsführer: ' + FIRMA.geschaeftsfuehrer + '\n\n' +
+    'Für Rückfragen stehen wir gerne zur Verfügung:\n' +
+    FIRMA.ansprechpartner + ', Tel. ' + FIRMA.telefon + ', ' + FIRMA.email + '\n\n' +
+    'Mit freundlichen Grüßen\n' +
+    FIRMA.name;
+
+  try {
+    MailApp.sendEmail({
+      to: order.haendlerEmail,
+      cc: FIRMA.email,
+      subject: betreff,
+      body: text,
+      name: FIRMA.name,
+      replyTo: FIRMA.email
+    });
+    return { sent: true };
+  } catch (e) {
+    // Wird z. B. ausgelöst, wenn das Skript für den Mailversand noch nicht
+    // freigegeben wurde (nach dem Einfügen von neuem Code muss man in der
+    // Regel einmal manuell im Apps-Script-Editor eine Funktion ausführen,
+    // damit Google die Berechtigung abfragt) oder das Tages-Sendelimit von
+    // Google erreicht ist.
+    return { sent: false, error: String(e && e.message || e) };
+  }
+}
+
+// Erstellt für eine Lager-Entnahme (Werbeartikel/Promo/Zugabe/Schwund) einen
+// Eigenbeleg als PDF und legt ihn in Google Drive ab (Ordner s.
+// EIGENBELEG_ORDNER, wird bei Bedarf automatisch angelegt). Gibt bei Erfolg
+// { ok:true, belegnummer, belegUrl } zurück, sonst { ok:false, error }.
+//
+// entnahme = { produkt, isbn, menge, ek, grund, kursName, notiz }
+//
+// WICHTIG: Diese Funktion nutzt DocumentApp/DriveApp — beim ersten Aufruf
+// (bzw. nach dem Einspielen dieser Code-Version) muss dafür ggf. einmalig
+// eine zusätzliche Berechtigung erteilt werden, genau wie beim Mailversand.
+function erstelleEigenbeleg(entnahme) {
+  try {
+    var jahr = new Date().getFullYear();
+    var belegnummer = 'ENT-' + jahr + '-' + ('000' + naechsteBelegnummer(jahr)).slice(-3);
+    var menge = Number(entnahme.menge) || 0;
+    var ekJeStueck = Number(entnahme.ek) || 0;
+    var wertGesamt = menge * ekJeStueck;
+    var heute = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd.MM.yyyy');
+    var jetzt = Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'dd.MM.yyyy HH:mm');
+
+    var tempDocName = 'TEMP_' + belegnummer;
+    var doc = DocumentApp.create(tempDocName);
+    var body = doc.getBody();
+    body.setMarginTop(36).setMarginBottom(36).setMarginLeft(50).setMarginRight(50);
+
+    // Logo oben im Briefkopf (wird live von GitHub geladen; falls das aus
+    // irgendeinem Grund fehlschlaegt, wird der Beleg trotzdem ohne Logo
+    // erstellt statt ganz zu scheitern).
+    try {
+      var logoBlob = UrlFetchApp.fetch(LOGO_URL).getBlob().setName('logo.png');
+      var logoImg = body.appendImage(logoBlob);
+      var logoRatio = logoImg.getHeight() / logoImg.getWidth();
+      logoImg.setWidth(170);
+      logoImg.setHeight(Math.round(170 * logoRatio));
+    } catch (imgErr) {
+      // Logo konnte nicht geladen werden - Beleg wird trotzdem erstellt.
+    }
+
+    // Firmen-Briefkopf
+    body.appendParagraph(FIRMA.name).setBold(true).setFontSize(13).setSpacingBefore(6);
+    body.appendParagraph(FIRMA.strasse + ', ' + FIRMA.plz + ' ' + FIRMA.ort)
+      .setFontSize(9).setForegroundColor('#555555');
+    body.appendParagraph('USt-IdNr.: ' + FIRMA.ustId + ' \u00b7 ' + FIRMA.handelsregister)
+      .setFontSize(9).setForegroundColor('#555555').setSpacingAfter(10);
+
+    body.appendHorizontalRule();
+
+    // Titel
+    body.appendParagraph('EIGENBELEG \u2013 unentgeltliche Warenentnahme')
+      .setBold(true).setFontSize(14).setForegroundColor('#0b4f8a').setSpacingBefore(10);
+    body.appendParagraph('(kein Verkauf, keine Rechnung \u2013 interner Beleg gem. \u00a7 3 Abs. 1b UStG)')
+      .setItalic(true).setFontSize(9).setForegroundColor('#555555').setSpacingAfter(12);
+
+    // Belegnummer / Datum
+    var kopfTabelle = body.appendTable([
+      ['Belegnummer', belegnummer],
+      ['Datum', heute]
+    ]);
+    styleTable(kopfTabelle, 140);
+    body.appendParagraph('').setSpacingAfter(6);
+
+    // Details der Entnahme
+    var zeilen = [
+      ['Produkt', entnahme.produkt + (entnahme.isbn ? ' (ISBN: ' + entnahme.isbn + ')' : '')],
+      ['Menge', menge + ' St\u00fcck'],
+      ['Einkaufspreis je St\u00fcck', ekJeStueck.toFixed(2) + ' \u20ac'],
+      ['Gesamtwert (Einkaufspreis)', wertGesamt.toFixed(2) + ' \u20ac'],
+      ['Grund der Entnahme', entnahme.grund || '']
+    ];
+    if (entnahme.kursName) zeilen.push(['Zugeh\u00f6riger Kurs', entnahme.kursName]);
+    if (entnahme.notiz) zeilen.push(['Notiz', entnahme.notiz]);
+    var detailTabelle = body.appendTable(zeilen);
+    styleTable(detailTabelle, 190);
+    body.appendParagraph('').setSpacingAfter(10);
+
+    // Hinweis zur umsatzsteuerlichen Behandlung (fuer Betriebspruefung/StB)
+    body.appendParagraph(
+      'Hinweis Umsatzsteuer: Diese Entnahme wird als unentgeltliche Wertabgabe (\u00a7 3 Abs. 1b UStG) ' +
+      'behandelt, sofern beim Einkauf des Produkts Vorsteuer geltend gemacht wurde. Die endg\u00fcltige ' +
+      'umsatzsteuerliche Bewertung und Verbuchung erfolgt im Rahmen der laufenden Buchhaltung durch das Steuerb\u00fcro.'
+    ).setFontSize(8.5).setForegroundColor('#777777').setItalic(true).setSpacingAfter(16);
+
+    // Footer
+    body.appendParagraph('Erstellt: ' + jetzt + ' Uhr, automatisch \u00fcber das Kalkulationstool.')
+      .setFontSize(8).setForegroundColor('#999999');
+    body.appendParagraph(FIRMA.geschaeftsfuehrer).setFontSize(8).setForegroundColor('#999999');
+
+    doc.saveAndClose();
+
+    var docFile = DriveApp.getFileById(doc.getId());
+    var pdfBlob = docFile.getAs('application/pdf').setName(belegnummer + ' - ' + entnahme.produkt + '.pdf');
+    var ordner = getOrCreateFolder(EIGENBELEG_ORDNER);
+    var pdfFile = ordner.createFile(pdfBlob);
+    docFile.setTrashed(true); // temporaeres Google Doc wird nicht mehr gebraucht, nur das PDF bleibt
+
+    return { ok: true, belegnummer: belegnummer, belegUrl: pdfFile.getUrl() };
+  } catch (e) {
+    return { ok: false, error: String(e && e.message || e) };
+  }
+}
+
+// Formatiert eine zweispaltige Eigenbeleg-Tabelle (Label | Wert) einheitlich:
+// fette, grau hinterlegte Label-Spalte in fester Breite, helle Rahmenfarbe.
+function styleTable(table, labelWidth) {
+  table.setBorderColor('#dddddd');
+  for (var i = 0; i < table.getNumRows(); i++) {
+    var row = table.getRow(i);
+    var labelCell = row.getCell(0);
+    var valueCell = row.getCell(1);
+    labelCell.setWidth(labelWidth);
+    labelCell.setBackgroundColor('#f2f2f2');
+    labelCell.getChild(0).asParagraph().setBold(true).setFontSize(10).setForegroundColor('#333333');
+    valueCell.setBackgroundColor('#ffffff');
+    valueCell.getChild(0).asParagraph().setFontSize(10);
+  }
+}
+
+function naechsteBelegnummer(jahr) {
+  var props = PropertiesService.getScriptProperties();
+  var key = 'belegCounter_' + jahr;
+  var next = (Number(props.getProperty(key)) || 0) + 1;
+  props.setProperty(key, String(next));
+  return next;
+}
+
+function getOrCreateFolder(name) {
+  var it = DriveApp.getFoldersByName(name);
+  if (it.hasNext()) return it.next();
+  return DriveApp.createFolder(name);
+}
+
+function jsonResponse(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
+}
+
+function getSS() {
+  return SpreadsheetApp.getActiveSpreadsheet();
+}
+
+function getOrCreateSheet(name) {
+  var ss = getSS();
+  var sh = ss.getSheetByName(name);
+  if (!sh) sh = ss.insertSheet(name);
+  return sh;
+}
+
+function getVersion() {
+  var sh = getOrCreateSheet('_Sync');
+  var v = sh.getRange('A1').getValue();
+  return v ? String(v) : '';
+}
+
+function setVersion(v) {
+  var sh = getOrCreateSheet('_Sync');
+  sh.getRange('A1').setValue(v);
+}
+
+function readState() {
+  var state = {};
+  COLLECTIONS.forEach(function (name) {
+    state[name] = readCollection(cap(name));
+  });
+  var settingsSheet = getSS().getSheetByName('Einstellungen');
+  SETTINGS_KEYS.forEach(function (key) {
+    state[key] = readSetting(settingsSheet, key);
+  });
+  if (!state.meta || typeof state.meta !== 'object') state.meta = {};
+  if (!state.standorte) state.standorte = [];
+  if (!state.kursarten) state.kursarten = [];
+  if (!state.kostenkategorien) state.kostenkategorien = [];
+  return { state: state, version: getVersion() };
+}
+
+function readSetting(sheet, key) {
+  if (!sheet) return null;
+  var data = sheet.getDataRange().getValues();
+  for (var i = 0; i < data.length; i++) {
+    if (data[i][0] === key) {
+      try {
+        return JSON.parse(data[i][1]);
+      } catch (e) {
+        return data[i][1];
+      }
+    }
+  }
+  return null;
+}
+
+function readCollection(sheetName) {
+  var sh = getSS().getSheetByName(sheetName);
+  if (!sh) return [];
+  var data = sh.getDataRange().getValues();
+  if (data.length < 2) return [];
+  var headers = data[0];
+  var out = [];
+  for (var i = 1; i < data.length; i++) {
+    var row = data[i];
+    var empty = row.every(function (c) { return c === '' || c === null; });
+    if (empty) continue;
+    var obj = {};
+    headers.forEach(function (h, idx) {
+      obj[h] = coerce(row[idx]);
+    });
+    out.push(obj);
+  }
+  return out;
+}
+
+function coerce(v) {
+  if (v === '' || v === null || v === undefined) return '';
+  if (v === true || v === false) return v;
+  if (typeof v === 'string') {
+    if (v === 'true') return true;
+    if (v === 'false') return false;
+    if (v.charAt(0) === '{' || v.charAt(0) === '[') {
+      try {
+        return JSON.parse(v);
+      } catch (e) {
+        // kein gültiges JSON -> als normaler Text weiterreichen
+      }
+    }
+    if (v !== '' && !isNaN(v) && !/^0[0-9]/.test(v)) return Number(v);
+    return v;
+  }
+  if (v instanceof Date) {
+    return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  }
+  return v;
+}
+
+function writeState(state) {
+  COLLECTIONS.forEach(function (name) {
+    writeCollection(cap(name), state[name] || []);
+  });
+  var settingsSheet = getOrCreateSheet('Einstellungen');
+  settingsSheet.clearContents();
+  var rows = SETTINGS_KEYS.map(function (key) {
+    return [key, JSON.stringify(state[key] !== undefined ? state[key] : null)];
+  });
+  settingsSheet.getRange(1, 1, rows.length, 2).setNumberFormat('@');
+  settingsSheet.getRange(1, 1, rows.length, 2).setValues(rows);
+}
+
+function writeCollection(sheetName, arr) {
+  var sh = getOrCreateSheet(sheetName);
+  sh.clearContents();
+  if (!arr || !arr.length) return;
+  var headers = [];
+  arr.forEach(function (obj) {
+    Object.keys(obj).forEach(function (k) {
+      if (headers.indexOf(k) === -1) headers.push(k);
+    });
+  });
+  var rows = arr.map(function (obj) {
+    return headers.map(function (h) {
+      var v = obj[h];
+      if (v === undefined || v === null) return '';
+      if (typeof v === 'object') return JSON.stringify(v);
+      return v;
+    });
+  });
+  // Alles als Text behandeln, damit Google Sheets Datumsangaben/IDs nicht
+  // eigenmächtig umformatiert (z. B. "2026-08-01" in ein Datumsformat).
+  sh.getRange(1, 1, rows.length + 1, headers.length).setNumberFormat('@');
+  sh.getRange(1, 1, 1, headers.length).setValues([headers]);
+  sh.getRange(2, 1, rows.length, headers.length).setValues(rows);
+}
+
+function cap(name) {
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}

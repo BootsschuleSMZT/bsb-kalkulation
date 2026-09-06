@@ -8,9 +8,28 @@
  * verschiebt sie in den passenden Monatsordner (02-Buchhaltung/<Jahr>/
  * 01-Belege/<Monat>/Ausgaben) und trägt eine Zeile in die Liste ein.
  *
+ * Jede erfasste Rechnung bekommt zusätzlich eine eigene fortlaufende
+ * Beleg-ID (z. B. ER-2026-0001) als interne Referenznummer, unabhängig
+ * von der Rechnungsnummer des Lieferanten.
+ *
+ * Enthält Sammelrechnungen (z. B. Amazon) mehrere Artikel, wird
+ * zusätzlich versucht, diese einzeln zu erkennen und in das
+ * Tabellenblatt "Artikelpositionen" einzutragen (Bezeichnung, Menge,
+ * Brutto, Netto, Kategorie) - verknüpft über die Beleg-ID. Das ist eine
+ * Hilfestellung per Texterkennung, keine Buchhaltungssoftware: unsichere
+ * oder nicht gefundene Werte (insbesondere Netto, wenn nicht explizit
+ * auf der Rechnung ausgewiesen) werden als "(bitte prüfen)" markiert
+ * und sollten kurz gegengeprüft werden.
+ *
  * WICHTIG: Damit die OCR-Texterkennung funktioniert, muss im Skript-Editor
  * einmalig unter "Dienste" (das "+" links neben "Dateien") der Dienst
  * "Drive API" (Advanced Google Service) hinzugefügt werden.
+ *
+ * HINWEIS ZU FOTOS: Die Texterkennung kann mit HEIC-Fotos (Standardformat
+ * von iPhone-Kameras) nicht zuverlässig umgehen. Bitte Kamera-Format am
+ * iPhone auf "Kompatibler" (JPEG) umstellen, oder Belege als PDF scannen.
+ * Nicht erkennbare Dateien landen automatisch im Unterordner
+ * "Eingang/Nicht erkannt – bitte prüfen".
  *
  * Bitte NICHTS in diesem Code ändern, außer wenn du dazu ausdrücklich
  * angeleitet wirst.
@@ -25,10 +44,33 @@ var BUCHHALTUNG_ROOT_ID = '1oWcXaW2nbhZIeiEcNLaEpIMooJPvdtaz';
 // Name des Tabellenblatts, in das jede erkannte Rechnung eingetragen wird.
 var LISTE_SHEET_NAME = 'Eingangsbelege';
 
+// Name des Tabellenblatts für einzelne Artikelpositionen aus Sammelrechnungen.
+var ARTIKEL_SHEET_NAME = 'Artikelpositionen';
+
+// Präfix für die eigene, fortlaufende Beleg-ID (z. B. ER-2026-0001).
+var BELEG_ID_PRAEFIX = 'ER';
+
 var MONATE = [
   '01_Januar', '02_Februar', '03_März', '04_April', '05_Mai', '06_Juni',
   '07_Juli', '08_August', '09_September', '10_Oktober', '11_November', '12_Dezember'
 ];
+
+// Stichwort-Kategorien für die automatische Einordnung einzelner Artikel.
+// Reihenfolge zählt: die erste passende Kategorie wird verwendet.
+var ARTIKEL_KATEGORIEN = [
+  { name: 'Büromaterial', stichworte: ['papier', 'ordner', 'drucker', 'toner', 'kugelschreiber', 'stift', 'block', 'umschlag', 'tinte', 'locher', 'hefter'] },
+  { name: 'Werbemittel/Marketing', stichworte: ['aufkleber', 'banner', 'flyer', 'visitenkarte', 'werbe', 'giveaway', 'give-away', 'promo', 'roll-up', 'plakat'] },
+  { name: 'Lehrmaterial/Literatur', stichworte: ['buch', 'literatur', 'seekarte', 'karte', 'skript', 'lehrbuch', 'heft', 'broschüre'] },
+  { name: 'Ausrüstung/Bootszubehör', stichworte: ['seil', 'tau', 'fender', 'rettungsweste', 'schwimmweste', 'boot', 'anker', 'knoten', 'poller', 'leine', 'kompass'] },
+  { name: 'Technik/Elektronik', stichworte: ['kabel', 'akku', 'batterie', 'ladegerät', 'handy', 'tablet', 'laptop', 'funkgerät', 'gps', 'elektronik', 'stecker', 'adapter'] },
+  { name: 'Reinigung/Verbrauchsmaterial', stichworte: ['reiniger', 'putz', 'tuch', 'handschuh', 'seife', 'desinfekt', 'müllsack', 'hygiene', 'schwamm'] },
+  { name: 'Verpflegung/Lebensmittel', stichworte: ['kaffee', 'wasser', 'snack', 'getränk', 'lebensmittel', 'keks', 'obst', 'tee'] }
+];
+var ARTIKEL_KATEGORIE_FALLBACK = 'Sonstiges';
+
+// Zeilen, die eindeutig Summen/Gebühren sind und NICHT als eigener Artikel
+// gezählt werden sollen (auch wenn sie wie eine Preiszeile aussehen).
+var ARTIKEL_AUSSCHLUSS_MUSTER = /(gesamtbetrag|gesamtsumme|gesamtpreis|zwischensumme|zu\s*zahlen|versandkosten|versandkostenpauschale|summe|total|bezahlt|rechnungsbetrag|inkl\.?\s*ust|zzgl\.?\s*ust|netto\b|brutto\b)/i;
 
 // Fügt beim Öffnen des Sheets ein eigenes Menü hinzu.
 function onOpen() {
@@ -41,18 +83,20 @@ function onOpen() {
 
 // Hauptfunktion: scannt den Eingang-Ordner, erkennt Datum/Lieferant/Betrag
 // per OCR, benennt die Datei um, verschiebt sie in den passenden
-// Monatsordner und trägt eine Zeile in die Liste ein.
+// Monatsordner und trägt eine Zeile (bzw. bei Sammelrechnungen mehrere
+// Artikelzeilen) in die Liste(n) ein.
 function verarbeiteEingangsbelege() {
   var eingang = DriveApp.getFolderById(EINGANG_ORDNER_ID);
   var dateien = eingang.getFiles();
   var sheet = getOrCreateListeSheet();
+  var artikelSheet = getOrCreateArtikelSheet();
   var verarbeitet = 0;
   var fehler = 0;
 
   while (dateien.hasNext()) {
     var datei = dateien.next();
     try {
-      verarbeiteEineDatei(datei, sheet);
+      verarbeiteEineDatei(datei, sheet, artikelSheet);
       verarbeitet++;
     } catch (e) {
       fehler++;
@@ -71,7 +115,7 @@ function verarbeiteEingangsbelege() {
   return meldung;
 }
 
-function verarbeiteEineDatei(datei, sheet) {
+function verarbeiteEineDatei(datei, sheet, artikelSheet) {
   var text = leseTextPerOcr(datei);
   var erkannt = erkenneFelder(text);
 
@@ -79,7 +123,9 @@ function verarbeiteEineDatei(datei, sheet) {
   var jahr = zielDatum.getFullYear();
   var monatIndex = zielDatum.getMonth(); // 0-11
 
-  var neuerName = baueDateiname(erkannt, datei.getName());
+  var belegId = baueBelegId(jahr, naechsteEingangsBelegNummer(jahr));
+
+  var neuerName = baueDateiname(erkannt, datei.getName(), belegId);
   datei.setName(neuerName);
 
   var ausgabenOrdner = getOrCreateAusgabenOrdner(jahr, monatIndex);
@@ -87,6 +133,7 @@ function verarbeiteEineDatei(datei, sheet) {
   eingangOrdnerEntfernen(datei);
 
   sheet.appendRow([
+    belegId,
     erkannt.datum ? Utilities.formatDate(erkannt.datum, Session.getScriptTimeZone(), 'dd.MM.yyyy') : '(bitte prüfen)',
     erkannt.lieferant || '(bitte prüfen)',
     erkannt.betrag !== null ? erkannt.betrag : '(bitte prüfen)',
@@ -94,6 +141,24 @@ function verarbeiteEineDatei(datei, sheet) {
     datei.getUrl(),
     erkannt.unsicher ? 'automatisch erfasst – bitte kurz prüfen' : 'automatisch erfasst'
   ]);
+
+  // Versuch, Sammelrechnungen (z. B. Amazon) in einzelne Artikel
+  // aufzusplitten. Wird nur eingetragen, wenn mindestens zwei plausible
+  // Artikelzeilen gefunden wurden - bei Rechnungen mit nur einer Position
+  // bleibt es bei der einen Zeile in der Hauptliste.
+  var artikel = erkenneArtikel(text);
+  if (artikel.length >= 2) {
+    artikel.forEach(function (a) {
+      artikelSheet.appendRow([
+        belegId,
+        a.bezeichnung,
+        a.menge,
+        a.brutto,
+        a.netto !== null ? a.netto : '(bitte prüfen)',
+        kategorisiereArtikel(a.bezeichnung)
+      ]);
+    });
+  }
 }
 
 // Nutzt die Drive-API (Advanced Service "Drive"), um eine temporäre
@@ -160,6 +225,66 @@ function erkenneFelder(text) {
   return ergebnis;
 }
 
+// Versucht, einzelne Artikelzeilen aus dem OCR-Text einer Sammelrechnung
+// (z. B. Amazon oder andere Vermittler) herauszulesen: Zeilen der Form
+// "<Menge x> <Bezeichnung> ... <Preis>". Summen-/Versand-/USt-Zeilen werden
+// bewusst ausgeschlossen, damit sie nicht fälschlich als Artikel zählen.
+// Netto wird nur übernommen, wenn er explizit in derselben Zeile steht -
+// ansonsten bleibt er leer ("(bitte prüfen)"), wie von Lars gewünscht,
+// statt ihn automatisch zu schätzen.
+function erkenneArtikel(text) {
+  var zeilen = text.split('\n');
+  var treffer = [];
+
+  var zeilenMuster = /^(?:(\d{1,3})\s*(?:x|St(?:ü|u)ck?)\s*)?(.{3,80}?)\s+(\d{1,3}(?:[.,]\d{3})*[.,]\d{2})\s*(?:€|EUR)?\s*$/i;
+
+  for (var i = 0; i < zeilen.length; i++) {
+    var zeile = zeilen[i].trim();
+    if (!zeile) continue;
+    if (ARTIKEL_AUSSCHLUSS_MUSTER.test(zeile)) continue;
+
+    var match = zeile.match(zeilenMuster);
+    if (!match) continue;
+
+    var bezeichnung = match[2].trim().replace(/\s{2,}/g, ' ');
+    // Zu kurze oder rein numerische "Bezeichnungen" sind meist keine echten
+    // Artikelnamen (z. B. Artikelnummern-Zeilen) - dann überspringen.
+    if (bezeichnung.length < 3 || /^\d+$/.test(bezeichnung)) continue;
+
+    var menge = match[1] ? Number(match[1]) : 1;
+    var brutto = parseGeldbetrag(match[3]);
+
+    // Netto nur übernehmen, wenn explizit als "netto" in unmittelbarer Nähe
+    // (gleiche oder vorherige Zeile) ausgewiesen ist - sonst offen lassen.
+    var netto = null;
+    var kontextZeile = (zeilen[i - 1] || '') + ' ' + zeile;
+    var nettoMatch = kontextZeile.match(/netto[^\d]{0,10}(\d{1,3}(?:[.,]\d{3})*[.,]\d{2})/i);
+    if (nettoMatch) netto = parseGeldbetrag(nettoMatch[1]);
+
+    treffer.push({
+      bezeichnung: bezeichnung.substring(0, 80),
+      menge: menge,
+      brutto: brutto,
+      netto: netto
+    });
+  }
+
+  return treffer;
+}
+
+// Ordnet eine Artikelbezeichnung anhand von Stichworten einer Kategorie zu.
+// Findet sich kein Treffer, wird die Fallback-Kategorie "Sonstiges" genutzt.
+function kategorisiereArtikel(bezeichnung) {
+  var text = (bezeichnung || '').toLowerCase();
+  for (var i = 0; i < ARTIKEL_KATEGORIEN.length; i++) {
+    var kategorie = ARTIKEL_KATEGORIEN[i];
+    for (var j = 0; j < kategorie.stichworte.length; j++) {
+      if (text.indexOf(kategorie.stichworte[j]) > -1) return kategorie.name;
+    }
+  }
+  return ARTIKEL_KATEGORIE_FALLBACK;
+}
+
 function parseGeldbetrag(s) {
   // "1.234,56" -> 1234.56 ; "12,50" -> 12.5 ; "12.50" -> 12.5
   var bereinigt = s.replace(/\./g, function (m, offset, str) {
@@ -172,12 +297,26 @@ function parseGeldbetrag(s) {
   return isNaN(zahl) ? 0 : zahl;
 }
 
-function baueDateiname(erkannt, alterName) {
+function baueDateiname(erkannt, alterName, belegId) {
   var datumStr = erkannt.datum ? Utilities.formatDate(erkannt.datum, Session.getScriptTimeZone(), 'yyyy-MM-dd') : 'ohne-Datum';
   var lieferantStr = (erkannt.lieferant || 'Unbekannt').replace(/[\\\/:*?"<>|]/g, '').replace(/\s+/g, '-').substring(0, 40);
   var betragStr = erkannt.betrag !== null ? String(erkannt.betrag.toFixed(2)).replace('.', ',') + '€' : 'ohne-Betrag';
   var endung = (alterName.match(/\.[a-zA-Z0-9]+$/) || [''])[0];
-  return datumStr + '_' + lieferantStr + '_' + betragStr + endung;
+  return belegId + '_' + datumStr + '_' + lieferantStr + '_' + betragStr + endung;
+}
+
+// Erzeugt die nächste fortlaufende Beleg-ID für Eingangsrechnungen, getrennt
+// nach Kalenderjahr (z. B. ER-2026-0001, ER-2026-0002, ...).
+function naechsteEingangsBelegNummer(jahr) {
+  var props = PropertiesService.getScriptProperties();
+  var key = 'ER_COUNTER_' + jahr;
+  var naechste = Number(props.getProperty(key) || '0') + 1;
+  props.setProperty(key, String(naechste));
+  return naechste;
+}
+
+function baueBelegId(jahr, nummer) {
+  return BELEG_ID_PRAEFIX + '-' + jahr + '-' + ('0000' + nummer).slice(-4);
 }
 
 // Legt bei Bedarf 02-Buchhaltung/<Jahr>/01-Belege/<Monat>/Ausgaben an und
@@ -216,7 +355,21 @@ function getOrCreateListeSheet() {
     sheet = ss.insertSheet(LISTE_SHEET_NAME);
   }
   if (sheet.getLastRow() === 0) {
-    sheet.appendRow(['Datum', 'Lieferant', 'Betrag (€)', 'Dateiname', 'Link', 'Status']);
+    sheet.appendRow(['Beleg-ID', 'Datum', 'Lieferant', 'Betrag (€)', 'Dateiname', 'Link', 'Status']);
+    sheet.getRange(1, 1, 1, 7).setFontWeight('bold');
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
+function getOrCreateArtikelSheet() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(ARTIKEL_SHEET_NAME);
+  if (!sheet) {
+    sheet = ss.insertSheet(ARTIKEL_SHEET_NAME);
+  }
+  if (sheet.getLastRow() === 0) {
+    sheet.appendRow(['Beleg-ID', 'Artikelbezeichnung', 'Menge', 'Brutto (€)', 'Netto (€)', 'Kategorie']);
     sheet.getRange(1, 1, 1, 6).setFontWeight('bold');
     sheet.setFrozenRows(1);
   }

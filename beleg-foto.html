@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>Beleg-Foto Upload</title>
+
+<!-- iOS "Zum Home-Bildschirm"-Unterstützung -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Beleg-Foto">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0f2942">
+<link rel="apple-touch-icon" href="data:image/png;base64,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">
+<link rel="icon" href="data:image/png;base64,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">
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+<style>
+  :root {
+    --navy: #0f2942;
+    --navy-dark: #0a1c30;
+    --orange: #f5a623;
+    --bg: #f4f6f8;
+    --card: #ffffff;
+    --text: #1f2937;
+    --muted: #6b7280;
+    --danger: #dc2626;
+    --ok: #16a34a;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+    min-height: 100vh;
+  }
+  .topbar {
+    background: var(--navy);
+    color: #fff;
+    padding: max(16px, env(safe-area-inset-top)) 20px 16px 20px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .topbar h1 {
+    font-size: 18px;
+    margin: 0;
+    font-weight: 600;
+  }
+  .topbar .sub {
+    font-size: 12px;
+    color: #b9c6d3;
+    margin-top: 2px;
+  }
+  .wrap {
+    max-width: 480px;
+    margin: 0 auto;
+    padding: 16px 16px 100px 16px;
+  }
+
+  /* --- Passwort-Gate --- */
+  #gate {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 70vh;
+    text-align: center;
+    padding: 24px;
+  }
+  #gate h2 { margin-bottom: 4px; }
+  #gate p { color: var(--muted); font-size: 14px; margin-top: 0; }
+  #gate input[type="password"] {
+    width: 100%;
+    max-width: 280px;
+    padding: 14px 16px;
+    border-radius: 12px;
+    border: 1px solid #d1d5db;
+    font-size: 16px;
+    margin-top: 16px;
+  }
+  #gate button, .btn {
+    margin-top: 14px;
+    background: var(--navy);
+    color: #fff;
+    border: none;
+    padding: 14px 24px;
+    border-radius: 12px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    width: 100%;
+    max-width: 280px;
+  }
+  #gateError {
+    color: var(--danger);
+    font-size: 13px;
+    margin-top: 10px;
+    min-height: 16px;
+  }
+
+  /* --- Hauptbereich --- */
+  #app { display: none; }
+  .card {
+    background: var(--card);
+    border-radius: 16px;
+    padding: 18px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+    margin-bottom: 16px;
+  }
+  .card h2 {
+    font-size: 15px;
+    margin: 0 0 4px 0;
+  }
+  .card .hint {
+    font-size: 13px;
+    color: var(--muted);
+    margin: 0 0 14px 0;
+    line-height: 1.4;
+  }
+
+  .capture-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    width: 100%;
+    padding: 18px;
+    border-radius: 14px;
+    border: none;
+    background: var(--orange);
+    color: #1f2937;
+    font-size: 17px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  .capture-btn:active { opacity: 0.85; }
+  .capture-icon { font-size: 22px; }
+
+  .thumbs {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin-top: 16px;
+  }
+  .thumb {
+    position: relative;
+    aspect-ratio: 3/4;
+    border-radius: 10px;
+    overflow: hidden;
+    background: #e5e7eb;
+  }
+  .thumb img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .thumb .num {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    background: rgba(15,41,66,0.85);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 2px 7px;
+    border-radius: 20px;
+  }
+  .thumb .remove {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: rgba(220,38,38,0.9);
+    color: #fff;
+    border: none;
+    font-size: 15px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+  }
+
+  #emptyHint {
+    text-align: center;
+    color: var(--muted);
+    font-size: 13px;
+    padding: 20px 0 4px 0;
+  }
+
+  .actions {
+    position: sticky;
+    bottom: 0;
+    background: linear-gradient(to top, var(--bg) 60%, rgba(244,246,248,0));
+    padding: 14px 0 6px 0;
+    margin-top: 4px;
+  }
+  #uploadBtn {
+    width: 100%;
+    padding: 16px;
+    border-radius: 14px;
+    border: none;
+    background: var(--navy);
+    color: #fff;
+    font-size: 16px;
+    font-weight: 700;
+    cursor: pointer;
+  }
+  #uploadBtn:disabled {
+    background: #9ca3af;
+    cursor: not-allowed;
+  }
+  #uploadBtn.secondary-hidden { display: none; }
+
+  #status {
+    margin-top: 12px;
+    font-size: 14px;
+    text-align: center;
+    line-height: 1.5;
+    min-height: 20px;
+  }
+  #status.ok { color: var(--ok); }
+  #status.err { color: var(--danger); }
+  #status.busy { color: var(--muted); }
+
+  .spinner {
+    display: inline-block;
+    width: 14px; height: 14px;
+    border: 2px solid #ffffff55;
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    vertical-align: -2px;
+    margin-right: 8px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  input[type="file"] { display: none; }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <div>
+    <h1>📷 Beleg-Foto Upload</h1>
+    <div class="sub">Bootsschule Bremen &middot; Eingangsbelege</div>
+  </div>
+</div>
+
+<div class="wrap">
+
+  <!-- Passwort-Gate -->
+  <div id="gate">
+    <h2>Zugang</h2>
+    <p>Bitte das Passwort für die Belegerfassung eingeben.</p>
+    <input type="password" id="pwInput" placeholder="Passwort" autocomplete="current-password" inputmode="text">
+    <button onclick="checkPassword()">Freischalten</button>
+    <div id="gateError"></div>
+    <div id="waRow" style="display:none;width:100%;max-width:280px;">
+      <button type="button" id="waBtn" class="btn" style="background:transparent;color:var(--navy);border:1px solid #d1d5db;" onclick="tryWebauthnUnlock()">🔓 Face ID / Fingerabdruck</button>
+    </div>
+  </div>
+
+  <!-- Hauptbereich -->
+  <div id="app">
+
+    <div class="card">
+      <h2>Beleg fotografieren</h2>
+      <p class="hint">Du kannst mehrere Fotos zu einem Beleg hinzufügen (z. B. Vorder- und Rückseite oder mehrseitige Rechnungen). Danach einmal auf „Hochladen" tippen – die Fotos werden automatisch verarbeitet.</p>
+
+      <button class="capture-btn" onclick="document.getElementById('fileInput').click()">
+        <span class="capture-icon">📸</span>
+        <span id="captureLabel">Foto aufnehmen</span>
+      </button>
+      <input type="file" id="fileInput" accept="image/*" capture="environment">
+
+      <div id="emptyHint">Noch keine Fotos aufgenommen.</div>
+      <div class="thumbs" id="thumbs"></div>
+    </div>
+
+    <div class="actions">
+      <button id="uploadBtn" onclick="uploadBeleg()" disabled>Hochladen</button>
+      <div id="status"></div>
+    </div>
+
+    <div id="logoutLink" style="text-align:center;margin-top:16px;font-size:11px;color:var(--muted);cursor:pointer;" onclick="bsbBelegLogout()">Auf diesem Gerät abmelden</div>
+
+  </div>
+</div>
+
+<script>
+const WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzQFaOfCabiZujSQV5JxMY-7zGMOPI-ybM8z7gd7aqTdQ6q_xK0j8qiLp5DGiEG1ebr/exec';
+const PW_STORAGE_KEY = 'bsb_beleg_pw';
+const WA_STORAGE_KEY = 'bsb_beleg_webauthn_id';
+
+let photos = []; // { id, dataUrl }
+let nextId = 1;
+
+// ---------- Face ID / Fingerabdruck (WebAuthn) ----------
+function b64uEncode(buf) {
+  const bytes = new Uint8Array(buf);
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function b64uDecode(str) {
+  str = str.replace(/-/g, '+').replace(/_/g, '/');
+  while (str.length % 4) str += '=';
+  const bin = atob(str);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+}
+function bsbRandomBytes(len) {
+  const a = new Uint8Array(len);
+  crypto.getRandomValues(a);
+  return a;
+}
+function webauthnSupported() {
+  return !!(window.PublicKeyCredential && navigator.credentials && navigator.credentials.create);
+}
+function registerWebauthn() {
+  if (!webauthnSupported()) return Promise.resolve(false);
+  return navigator.credentials.create({
+    publicKey: {
+      challenge: bsbRandomBytes(32),
+      rp: { name: 'BSB Beleg-Foto' },
+      user: { id: bsbRandomBytes(16), name: 'bsb-beleg-nutzer', displayName: 'BSB Beleg-Foto' },
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
+      authenticatorSelection: { authenticatorAttachment: 'platform', userVerification: 'required' },
+      timeout: 60000
+    }
+  }).then(function(cred) {
+    localStorage.setItem(WA_STORAGE_KEY, b64uEncode(cred.rawId));
+    return true;
+  }).catch(function() { return false; });
+}
+function unlockWithWebauthn() {
+  const idB64 = localStorage.getItem(WA_STORAGE_KEY);
+  if (!idB64 || !webauthnSupported()) return Promise.resolve(false);
+  return navigator.credentials.get({
+    publicKey: {
+      challenge: bsbRandomBytes(32),
+      allowCredentials: [{ id: b64uDecode(idB64), type: 'public-key' }],
+      userVerification: 'required',
+      timeout: 60000
+    }
+  }).then(function() { return true; }).catch(function() { return false; });
+}
+function tryWebauthnUnlock() {
+  const btn = document.getElementById('waBtn');
+  const errEl = document.getElementById('gateError');
+  btn.disabled = true;
+  errEl.textContent = '';
+  unlockWithWebauthn().then(function(ok) {
+    btn.disabled = false;
+    if (ok) {
+      unlockApp();
+    } else {
+      errEl.textContent = 'Face ID/Fingerabdruck fehlgeschlagen – bitte Passwort eingeben.';
+    }
+  });
+}
+function maybeOfferWebauthn() {
+  if (!webauthnSupported()) return;
+  if (localStorage.getItem(WA_STORAGE_KEY)) return;
+  setTimeout(function() {
+    const ask = document.createElement('div');
+    ask.id = 'waOffer';
+    ask.style.cssText = 'position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:#fff;color:#1f2937;border-radius:12px;box-shadow:0 6px 24px rgba(0,0,0,.25);padding:14px 18px;z-index:9999;display:flex;gap:10px;align-items:center;max-width:92vw;flex-wrap:wrap;justify-content:center;';
+    ask.innerHTML = '<span style="font-size:13px;">Face ID / Fingerabdruck für dieses Gerät einrichten?</span>' +
+      '<button type="button" id="waYes" style="padding:8px 14px;border-radius:8px;border:none;background:var(--navy);color:#fff;cursor:pointer;">Ja, einrichten</button>' +
+      '<button type="button" id="waNo" style="padding:8px 14px;border-radius:8px;border:1px solid #d1d5db;background:transparent;color:#1f2937;cursor:pointer;">Nein danke</button>';
+    document.body.appendChild(ask);
+    document.getElementById('waNo').addEventListener('click', function() { document.body.removeChild(ask); });
+    document.getElementById('waYes').addEventListener('click', function() {
+      registerWebauthn().then(function(ok) {
+        document.body.removeChild(ask);
+        setStatus(ok ? '✅ Face ID/Fingerabdruck eingerichtet.' : '⚠️ Einrichtung nicht möglich oder abgebrochen.', ok ? 'ok' : 'err');
+      });
+    });
+  }, 1000);
+}
+function bsbBelegLogout() {
+  if (!confirm('Auf diesem Gerät abmelden? Passwort und Face ID/Fingerabdruck müssen dann neu eingegeben bzw. eingerichtet werden.')) return;
+  localStorage.removeItem(PW_STORAGE_KEY);
+  localStorage.removeItem(WA_STORAGE_KEY);
+  location.reload();
+}
+
+// ---------- Passwort ----------
+function unlockApp() {
+  document.getElementById('gate').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+}
+
+function checkPassword() {
+  const val = document.getElementById('pwInput').value.trim();
+  if (!val) return;
+  verifyPassword(val, true);
+}
+
+async function verifyPassword(pw, showErrors) {
+  const errEl = document.getElementById('gateError');
+  errEl.textContent = showErrors ? 'Prüfe…' : '';
+  try {
+    const res = await fetch(WEB_APP_URL + '?pw=' + encodeURIComponent(pw), { method: 'GET' });
+    const data = await res.json();
+    if (data && data.ok) {
+      localStorage.setItem(PW_STORAGE_KEY, pw);
+      unlockApp();
+      errEl.textContent = '';
+      if (showErrors) maybeOfferWebauthn();
+    } else if (showErrors) {
+      errEl.textContent = 'Falsches Passwort. Bitte erneut versuchen.';
+    }
+  } catch (e) {
+    if (showErrors) errEl.textContent = 'Verbindung fehlgeschlagen. Bitte Internetverbindung prüfen.';
+  }
+}
+
+(function initGate() {
+  const saved = localStorage.getItem(PW_STORAGE_KEY);
+  const waId = localStorage.getItem(WA_STORAGE_KEY);
+  if (saved && waId && webauthnSupported()) {
+    // Passwort bekannt, aber Face-ID/Fingerabdruck-Sperre ist aktiv -> nicht automatisch entsperren
+    document.getElementById('waRow').style.display = 'block';
+    setTimeout(tryWebauthnUnlock, 300);
+  } else if (saved) {
+    verifyPassword(saved, false);
+  }
+  document.getElementById('pwInput').addEventListener('keydown', function(e) {
+    if (e.key === 'Enter') checkPassword();
+  });
+})();
+
+// ---------- Foto-Aufnahme ----------
+document.getElementById('fileInput').addEventListener('change', async function(e) {
+  const file = e.target.files && e.target.files[0];
+  e.target.value = ''; // reset, damit dieselbe Datei erneut gewählt werden kann
+  if (!file) return;
+  setStatus('Foto wird verarbeitet…', 'busy');
+  try {
+    const dataUrl = await resizeAndEncode(file, 1800, 0.82);
+    photos.push({ id: nextId++, dataUrl: dataUrl });
+    renderThumbs();
+    setStatus('', '');
+  } catch (err) {
+    setStatus('Foto konnte nicht verarbeitet werden: ' + err.message, 'err');
+  }
+});
+
+function resizeAndEncode(file, maxDim, quality) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Datei konnte nicht gelesen werden'));
+    reader.onload = () => { img.src = reader.result; };
+    img.onerror = () => reject(new Error('Bild konnte nicht geladen werden'));
+    img.onload = () => {
+      let w = img.naturalWidth, h = img.naturalHeight;
+      if (w > maxDim || h > maxDim) {
+        const scale = maxDim / Math.max(w, h);
+        w = Math.round(w * scale);
+        h = Math.round(h * scale);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, w, h);
+      resolve(canvas.toDataURL('image/jpeg', quality));
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function renderThumbs() {
+  const wrap = document.getElementById('thumbs');
+  const emptyHint = document.getElementById('emptyHint');
+  wrap.innerHTML = '';
+  emptyHint.style.display = photos.length ? 'none' : 'block';
+  photos.forEach((p, idx) => {
+    const div = document.createElement('div');
+    div.className = 'thumb';
+    div.innerHTML = '<span class="num">' + (idx + 1) + '</span>' +
+      '<img src="' + p.dataUrl + '">' +
+      '<button class="remove" onclick="removePhoto(' + p.id + ')">✕</button>';
+    wrap.appendChild(div);
+  });
+  document.getElementById('uploadBtn').disabled = photos.length === 0;
+  document.getElementById('captureLabel').textContent =
+    photos.length === 0 ? 'Foto aufnehmen' : 'Weiteres Foto aufnehmen';
+}
+
+function removePhoto(id) {
+  photos = photos.filter(p => p.id !== id);
+  renderThumbs();
+}
+
+// ---------- Upload ----------
+async function uploadBeleg() {
+  if (photos.length === 0) return;
+  const btn = document.getElementById('uploadBtn');
+  btn.disabled = true;
+  setStatus('<span class="spinner"></span>PDF wird erstellt…', 'busy');
+
+  try {
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ unit: 'pt', format: 'a4' });
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+
+    for (let i = 0; i < photos.length; i++) {
+      if (i > 0) pdf.addPage();
+      const dims = await getImageDims(photos[i].dataUrl);
+      const margin = 20;
+      const maxW = pageW - margin * 2;
+      const maxH = pageH - margin * 2;
+      const scale = Math.min(maxW / dims.w, maxH / dims.h);
+      const w = dims.w * scale;
+      const h = dims.h * scale;
+      const x = (pageW - w) / 2;
+      const y = (pageH - h) / 2;
+      pdf.addImage(photos[i].dataUrl, 'JPEG', x, y, w, h);
+    }
+
+    const pdfBase64 = pdf.output('datauristring').split(',')[1];
+    const pw = localStorage.getItem(PW_STORAGE_KEY);
+    const filename = 'Handy-Beleg-' + formatTimestamp() + '.pdf';
+
+    setStatus('<span class="spinner"></span>Wird hochgeladen…', 'busy');
+
+    const res = await fetch(WEB_APP_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({
+        pw: pw,
+        dataBase64: pdfBase64,
+        filename: filename,
+        mimeType: 'application/pdf'
+      })
+    });
+    const data = await res.json();
+
+    if (data && data.ok) {
+      setStatus('✅ Hochgeladen! ' + (data.message || ''), 'ok');
+      photos = [];
+      renderThumbs();
+    } else {
+      setStatus('⚠️ Fehler beim Hochladen: ' + (data && data.error ? data.error : 'unbekannt'), 'err');
+    }
+  } catch (err) {
+    setStatus('⚠️ Fehler: ' + err.message, 'err');
+  } finally {
+    document.getElementById('uploadBtn').disabled = photos.length === 0;
+  }
+}
+
+function getImageDims(dataUrl) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
+    img.src = dataUrl;
+  });
+}
+
+function formatTimestamp() {
+  const d = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + '_' +
+    pad(d.getHours()) + pad(d.getMinutes()) + pad(d.getSeconds());
+}
+
+function setStatus(html, cls) {
+  const el = document.getElementById('status');
+  el.innerHTML = html;
+  el.className = cls || '';
+}
+</script>
+
+</body>
+</html>

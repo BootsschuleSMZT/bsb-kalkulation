@@ -3273,19 +3273,63 @@ function renderPraxisTeilnehmerZeile(t, standorte){
   return html;
 }
 
+// Zeigt die Teilnehmer-IDs einer Pruefung in einem echten (sichtbaren) Modal
+// an, statt in einem window.prompt() — der blockiert in vielen Umgebungen
+// unbemerkt die Seite oder wird gar nicht angezeigt und wirkt dann so, als
+// würde der Button "nichts tun". Bietet zusätzlich einen Kopieren-Button
+// (mit Zwischenablage-Fallback fürs Markieren), damit die Liste direkt für
+// die Rechnung übernommen werden kann.
+function showPraxisRechnungModal(tag, eintraege){
+  var text = eintraege.map(function(e){ return e.anzeige; }).join('\n');
+  var overlay = document.createElement('div');
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+  var box = document.createElement('div');
+  box.style.cssText = 'background:var(--surface,#fff);color:var(--ink,#111);max-width:560px;width:100%;max-height:85vh;overflow:auto;border-radius:10px;padding:20px;box-shadow:0 10px 40px rgba(0,0,0,0.3);';
+  box.innerHTML =
+    '<h3 style="margin-top:0;">IDs für Rechnung – Prüfung '+escapeHtml(tag)+'</h3>' +
+    (eintraege.length ?
+      '<div style="font-size:13px;color:var(--ink-dim,#666);margin-bottom:10px;">'+eintraege.length+' Teilnehmer. Zum manuellen Markieren einfach in das Feld klicken, oder den Kopieren-Button nutzen.</div>' +
+      '<textarea readonly style="width:100%;min-height:220px;font-family:inherit;font-size:13px;background:var(--surface-2,#f5f5f5);padding:12px;border-radius:6px;box-sizing:border-box;">'+escapeHtml(text)+'</textarea>'
+      : '<div style="color:var(--ink-dim,#666);">Für dieses Datum sind keine Teilnehmer hinterlegt.</div>') +
+    '<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px;">' +
+    (eintraege.length ? '<button class="btn ghost" type="button" data-rechnung-copy>In Zwischenablage kopieren</button>' : '') +
+    '<button class="btn" type="button" data-rechnung-close>Schließen</button>' +
+    '</div>';
+  overlay.appendChild(box);
+  document.body.appendChild(overlay);
+  function close(){ document.body.removeChild(overlay); }
+  box.querySelector('[data-rechnung-close]').addEventListener('click', close);
+  overlay.addEventListener('click', function(ev){ if (ev.target === overlay) close(); });
+  var copyBtn = box.querySelector('[data-rechnung-copy]');
+  if (copyBtn) copyBtn.addEventListener('click', function(){
+    var ta = box.querySelector('textarea');
+    function fallbackCopy(){
+      ta.focus(); ta.select();
+      try { document.execCommand('copy'); showToast('In Zwischenablage kopiert.'); }
+      catch (e){ showToast('Kopieren nicht möglich – bitte manuell markieren.', true); }
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).then(function(){ showToast('In Zwischenablage kopiert.'); }).catch(fallbackCopy);
+    } else { fallbackCopy(); }
+  });
+}
+
 function wirePraxisEvents(){
   var nachladenBtn = document.getElementById('btn-praxis-nachladen');
   if (nachladenBtn) nachladenBtn.addEventListener('click', function(){
     nachladenBtn.disabled = true;
+    var nachladenLabel = nachladenBtn.textContent;
+    nachladenBtn.textContent = 'Lädt …';
     fetch(SHEETS_API_URL, { method:'POST', body: JSON.stringify({ action:'praxisNachladen', pw: APP_PW }) })
       .then(function(r){ return r.json(); }).then(function(data){
         nachladenBtn.disabled = false;
+        nachladenBtn.textContent = nachladenLabel;
         if (data && data.ok){
           state.praxistermine = data.praxistermine;
           showToast((data.anzahlNeu||0) + ' neue Teilnehmer geladen.');
           renderPraxistermine();
         } else { showToast('Fehler beim Nachladen.', true); }
-      }).catch(function(){ nachladenBtn.disabled = false; showToast('Verbindung fehlgeschlagen.', true); });
+      }).catch(function(){ nachladenBtn.disabled = false; nachladenBtn.textContent = nachladenLabel; showToast('Verbindung fehlgeschlagen.', true); });
   });
 
   var formStandort = document.getElementById('form-standort-neu');
@@ -3313,23 +3357,29 @@ function wirePraxisEvents(){
   document.querySelectorAll('.btn-rechnung-uebersicht').forEach(function(btn){
     btn.addEventListener('click', function(){
       var tag = btn.getAttribute('data-tag');
+      btn.disabled = true;
+      var label = btn.textContent;
+      btn.textContent = 'Lädt …';
       fetch(SHEETS_API_URL, { method:'POST', body: JSON.stringify({ action:'praxisRechnungsUebersicht', pw: APP_PW, pruefungsdatum: tag }) })
         .then(function(r){ return r.json(); }).then(function(data){
           if (data && data.ok){
-            var text = data.eintraege.map(function(e){ return e.anzeige; }).join('\n');
-            window.prompt('Zum Kopieren markieren (Strg/Cmd+C) – Prüfung ' + tag + ':', text);
-          }
-        });
+            showPraxisRechnungModal(tag, data.eintraege || []);
+          } else { showToast('IDs konnten nicht geladen werden.', true); }
+        }).catch(function(){ showToast('Verbindung fehlgeschlagen.', true); })
+        .finally(function(){ btn.disabled = false; btn.textContent = label; });
     });
   });
 
   document.querySelectorAll('.chk-angerufen').forEach(function(chk){
     chk.addEventListener('change', function(){
       var id = chk.getAttribute('data-id');
+      var vorherigerWert = !chk.checked; // zum Zurücksetzen bei Fehler
+      chk.disabled = true;
       fetch(SHEETS_API_URL, { method:'POST', body: JSON.stringify({ action:'praxisAngerufenUmschalten', pw: APP_PW, teilnehmerId: id }) })
         .then(function(r){ return r.json(); }).then(function(data){
           if (data && data.ok){ state.praxistermine = data.praxistermine; renderPraxistermine(); }
-        });
+          else { chk.checked = vorherigerWert; chk.disabled = false; showToast('Konnte nicht gespeichert werden.', true); }
+        }).catch(function(){ chk.checked = vorherigerWert; chk.disabled = false; showToast('Verbindung fehlgeschlagen.', true); });
     });
   });
 
@@ -3338,6 +3388,8 @@ function wirePraxisEvents(){
       ev.preventDefault();
       var id = form.getAttribute('data-id');
       var fd = new FormData(form);
+      var submitBtn = form.querySelector('button[type="submit"]');
+      if (submitBtn) submitBtn.disabled = true;
       fetch(SHEETS_API_URL, {
         method:'POST',
         body: JSON.stringify({ action:'praxisTerminEintragen', pw: APP_PW, teilnehmerId: id, ort: fd.get('ort'), datum: fd.get('datum'), uhrzeit: fd.get('uhrzeit') })
@@ -3353,8 +3405,8 @@ function wirePraxisEvents(){
                 renderPraxistermine();
               }
             });
-        } else { showToast('Fehler beim Eintragen des Termins.', true); }
-      }).catch(function(){ showToast('Verbindung fehlgeschlagen.', true); });
+        } else { if (submitBtn) submitBtn.disabled = false; showToast('Fehler beim Eintragen des Termins.', true); }
+      }).catch(function(){ if (submitBtn) submitBtn.disabled = false; showToast('Verbindung fehlgeschlagen.', true); });
     });
   });
 
@@ -3366,6 +3418,9 @@ function wirePraxisEvents(){
       var id = btn.getAttribute('data-id');
       var textarea = document.querySelector('.mail-vorschau-body[data-id="'+id+'"]');
       var body = textarea ? textarea.value : praxisUiState.mailVorschau.body;
+      btn.disabled = true;
+      var label = btn.textContent;
+      btn.textContent = 'Sende …';
       fetch(SHEETS_API_URL, {
         method:'POST',
         body: JSON.stringify({ action:'praxisMailVersenden', pw: APP_PW, teilnehmerId: id, subject: praxisUiState.mailVorschau.subject, body: body })
@@ -3375,8 +3430,8 @@ function wirePraxisEvents(){
           praxisUiState.mailVorschau = null;
           showToast('Mail versendet.');
           renderPraxistermine();
-        } else { showToast('Mail konnte nicht versendet werden.', true); }
-      }).catch(function(){ showToast('Verbindung fehlgeschlagen.', true); });
+        } else { btn.disabled = false; btn.textContent = label; showToast('Mail konnte nicht versendet werden.', true); }
+      }).catch(function(){ btn.disabled = false; btn.textContent = label; showToast('Verbindung fehlgeschlagen.', true); });
     });
   });
 
@@ -3385,10 +3440,12 @@ function wirePraxisEvents(){
       var id = btn.getAttribute('data-id');
       var neuesDatum = window.prompt('Neues Prüfungsdatum (TT.MM.JJJJ):');
       if (!neuesDatum) return;
+      btn.disabled = true;
       fetch(SHEETS_API_URL, { method:'POST', body: JSON.stringify({ action:'praxisUmbuchen', pw: APP_PW, teilnehmerId: id, neuesDatum: neuesDatum }) })
         .then(function(r){ return r.json(); }).then(function(data){
           if (data && data.ok){ state.praxistermine = data.praxistermine; showToast('Umgebucht.'); renderPraxistermine(); }
-        });
+          else { btn.disabled = false; showToast('Umbuchen fehlgeschlagen.', true); }
+        }).catch(function(){ btn.disabled = false; showToast('Verbindung fehlgeschlagen.', true); });
     });
   });
 
@@ -3396,12 +3453,16 @@ function wirePraxisEvents(){
   if (formSz) formSz.addEventListener('submit', function(ev){
     ev.preventDefault();
     var fd = new FormData(ev.target);
+    var submitBtn = ev.target.querySelector('button[type="submit"]');
+    if (submitBtn && submitBtn.disabled) return; // schon in Bearbeitung – zweiten Klick ignorieren
+    if (submitBtn) { submitBtn.disabled = true; submitBtn.dataset.label = submitBtn.textContent; submitBtn.textContent = 'Wird angelegt …'; }
     fetch(SHEETS_API_URL, {
       method:'POST',
       body: JSON.stringify({ action:'praxisSelbstzahlerAnlegen', pw: APP_PW, nachname: fd.get('nachname'), vorname: fd.get('vorname'), telefon: fd.get('telefon'), email: fd.get('email') })
     }).then(function(r){ return r.json(); }).then(function(data){
       if (data && data.ok){ state.praxistermine = data.praxistermine; ev.target.reset(); showToast('Direktkunde angelegt.'); renderPraxistermine(); }
-    }).catch(function(){ showToast('Verbindung fehlgeschlagen.', true); });
+      else { if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = submitBtn.dataset.label; } showToast('Anlegen fehlgeschlagen.', true); }
+    }).catch(function(){ if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = submitBtn.dataset.label; } showToast('Verbindung fehlgeschlagen.', true); });
   });
 }
 

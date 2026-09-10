@@ -299,6 +299,8 @@ if (!state.haendler) state.haendler = [];
 if (!state.bestellungen) state.bestellungen = [];
 if (!state.entnahmen) state.entnahmen = [];
 if (!state.praxistermine) state.praxistermine = [];
+if (!state.kurstermine) state.kurstermine = [];
+if (!state.kursteilnehmer) state.kursteilnehmer = [];
 if (!state.gfStunden) state.gfStunden = [];
 if (!state.meta) state.meta = {};
 if (!state.meta.praxisStandorte) state.meta.praxisStandorte = [];
@@ -328,6 +330,8 @@ function backfillAfterLoad(){
   if (!state.bestellungen) state.bestellungen = [];
   if (!state.entnahmen) state.entnahmen = [];
   if (!state.praxistermine) state.praxistermine = [];
+  if (!state.kurstermine) state.kurstermine = [];
+  if (!state.kursteilnehmer) state.kursteilnehmer = [];
   if (!state.gfStunden) state.gfStunden = [];
   if (!state.meta) state.meta = {};
   if (!state.meta.ustManuell) state.meta.ustManuell = {};
@@ -2830,6 +2834,7 @@ function renderAll(){
   renderMinijobber();
   renderLager();
   renderPraxistermine();
+  renderKursverwaltung();
   renderGfStunden();
   renderUst();
   renderEinstellungen();
@@ -2860,7 +2865,7 @@ function showToast(msg, isErr){
   t._timer = setTimeout(function(){ t.className=''; }, 2600);
 }
 
-var TAB_NAMES = ['dashboard','kurse','einnahmen','ausgaben','fixkosten','minijobber','lager','praxistermine','gfStunden','ust','einstellungen','zugaenge'];
+var TAB_NAMES = ['dashboard','kurse','einnahmen','ausgaben','fixkosten','minijobber','lager','praxistermine','kursverwaltung','gfStunden','ust','einstellungen','zugaenge'];
 
 function shellHTML(activeTab){
   // Static app shell — sidebar nav and empty tab-panel containers.
@@ -2892,6 +2897,7 @@ function shellHTML(activeTab){
         navBtn('minijobber','⏱','Minijobber')+
         navBtn('lager','▣','Lager')+
       navBtn('praxistermine','⛵','Praxistermine')+
+      navBtn('kursverwaltung','🎓','Kursverwaltung')+
       navBtn('gfStunden','🕒','Arbeitszeit GF')+
         navBtn('ust','%','USt / Vorsteuer')+
         navBtn('einstellungen','⚙','Einstellungen')+
@@ -2902,7 +2908,7 @@ function shellHTML(activeTab){
     '</div>'+
     '<div id="main">'+
       panel('dashboard')+panel('kurse')+panel('einnahmen')+panel('ausgaben')+panel('fixkosten')+panel('minijobber')+panel('lager')+
-      panel('praxistermine')+panel('gfStunden')+panel('ust')+panel('einstellungen')+panel('zugaenge')+
+      panel('praxistermine')+panel('kursverwaltung')+panel('gfStunden')+panel('ust')+panel('einstellungen')+panel('zugaenge')+
     '</div>'+
     '<div id="toast"></div>';
 }
@@ -3707,6 +3713,377 @@ function wireGfStundenEvents(){
     });
   });
 }
+
+/* ============================= KURSVERWALTUNG ============================= */
+var kursUiState = { offenerKurs: null, glueckwunschVorschau: null, editKursId: null, editTeilnehmerId: null };
+
+function renderKursverwaltung(){
+  var kurse = state.kurstermine || [];
+  var teilnehmer = state.kursteilnehmer || [];
+
+  var html = '<div class="pagehead"><h1>Kursverwaltung</h1><p>Kurstermine und Teilnehmer verwalten, Buchungs-/Vorbereitungs-/Erinnerungs- und Glückwunschmails versenden, automatische Erinnerungen und Shop-Bestellungen manuell testen.</p></div>';
+
+  html += '<div class="card"><h2>Automatisierung – manuell testen</h2>'+
+    '<div class="cardsub">Diese Buttons lösen genau die Aktionen aus, die sonst automatisch per Zeittrigger laufen (siehe kursTriggerEinrichten) – zum Testen, ohne auf den nächsten Lauf zu warten.</div>'+
+    '<div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;">'+
+    '<button class="btn" id="btn-kurs-erinnerung-jetzt">Erinnerungen jetzt prüfen &amp; versenden</button>'+
+    '<button class="btn" id="btn-kurs-shopmails-jetzt">Shop-Bestellmails jetzt abrufen &amp; verarbeiten</button>'+
+    '</div></div>';
+
+  html += '<div class="card"><h2>Kurstermine</h2>';
+  html += '<table><thead><tr><th>Kurs</th><th>Ort</th><th>Beginn</th><th>Wochentag</th><th>Uhrzeit</th><th>Preis</th><th>Teilnehmer</th><th></th></tr></thead><tbody>';
+  kurse.forEach(function(k){
+    var anzahl = teilnehmer.filter(function(t){ return t.kursId === k.id; }).length;
+    var offen = kursUiState.offenerKurs === k.id;
+    html += '<tr>'+
+      '<td>'+escapeHtml(k.name||'')+'</td>'+
+      '<td>'+escapeHtml(k.ort||'')+'</td>'+
+      '<td>'+escapeHtml(k.kursbeginn||'')+'</td>'+
+      '<td>'+escapeHtml(k.wochentag||'')+'</td>'+
+      '<td>'+escapeHtml(k.uhrzeit||'')+'</td>'+
+      '<td>'+(k.preis!==''&&k.preis!=null?escapeHtml(String(k.preis))+' €':'')+'</td>'+
+      '<td><button class="btn-kurs-toggle" data-id="'+k.id+'">'+(offen?'▾ ':'▸ ')+anzahl+' Teilnehmer</button></td>'+
+      '<td><button class="btn-kurs-bearbeiten" data-id="'+k.id+'" title="Bearbeiten">✎</button> <button class="btn-kurs-entfernen" data-id="'+k.id+'" title="Entfernen">✕</button></td>'+
+      '</tr>';
+    if (kursUiState.editKursId === k.id){
+      html += '<tr><td colspan="8"><form class="form-kurs-bearbeiten" data-id="'+k.id+'" style="display:flex; gap:8px; flex-wrap:wrap; padding:8px 0;">'+
+        '<input name="name" value="'+escapeHtml(k.name||'')+'" placeholder="Kursname" required>'+
+        '<input name="ort" value="'+escapeHtml(k.ort||'')+'" placeholder="Ort">'+
+        '<input name="kursbeginn" value="'+escapeHtml(k.kursbeginn||'')+'" placeholder="Beginn (z.B. 12.10.2026)">'+
+        '<input name="wochentag" value="'+escapeHtml(k.wochentag||'')+'" placeholder="Wochentag">'+
+        '<input name="uhrzeit" value="'+escapeHtml(k.uhrzeit||'')+'" placeholder="Uhrzeit">'+
+        '<input name="adresse" value="'+escapeHtml(k.adresse||'')+'" placeholder="Adresse" style="min-width:220px;">'+
+        '<input name="googleMapsLink" value="'+escapeHtml(k.googleMapsLink||'')+'" placeholder="Google-Maps-Link" style="min-width:220px;">'+
+        '<input name="preis" value="'+escapeHtml(k.preis!=null?String(k.preis):'')+'" placeholder="Preis">'+
+        '<button class="btn" type="submit">Speichern</button> <button type="button" class="btn-kurs-bearbeiten-abbrechen" data-id="'+k.id+'">Abbrechen</button>'+
+        '</form></td></tr>';
+    }
+    if (offen){
+      html += '<tr><td colspan="8" style="padding:0;">';
+      var liste = teilnehmer.filter(function(t){ return t.kursId === k.id; });
+      html += '<div style="padding:8px 12px;">';
+      if (!liste.length) html += '<div class="cardsub">Noch keine Teilnehmer in diesem Kurs.</div>';
+      liste.forEach(function(t){ html += renderKursTeilnehmerZeile(t, k); });
+      html += renderKursTeilnehmerNeuForm(k);
+      html += '</div></td></tr>';
+    }
+  });
+  html += '</tbody></table>';
+  html += '<form id="form-kurs-neu" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">'+
+    '<input name="name" placeholder="Kursname" required>'+
+    '<input name="ort" placeholder="Ort">'+
+    '<input name="kursbeginn" placeholder="Beginn (z.B. 12.10.2026)">'+
+    '<input name="wochentag" placeholder="Wochentag">'+
+    '<input name="uhrzeit" placeholder="Uhrzeit">'+
+    '<input name="adresse" placeholder="Adresse" style="min-width:220px;">'+
+    '<input name="googleMapsLink" placeholder="Google-Maps-Link" style="min-width:220px;">'+
+    '<input name="preis" placeholder="Preis">'+
+    '<button class="btn" type="submit">Kurstermin anlegen</button></form>';
+  html += '</div>';
+
+  document.getElementById('panel-kursverwaltung').innerHTML = html;
+  wireKursEvents();
+}
+
+function kursAmpel(t){
+  var felder = ['dokInfomail','dokAntragPruefung','dokKopieFs','dokArzt','dokPassbild'];
+  var anzahl = felder.filter(function(f){ return !!t[f]; }).length;
+  var farbe = anzahl === 5 ? '#2e7d32' : (anzahl === 0 ? '#c62828' : '#ef6c00');
+  return '<span title="'+anzahl+' von 5 Unterlagen vollständig" style="display:inline-block; width:12px; height:12px; border-radius:50%; background:'+farbe+'; margin-right:6px;"></span>';
+}
+
+function renderKursTeilnehmerZeile(t, k){
+  var html = '<div class="kurs-teilnehmer-zeile" data-id="'+t.id+'" style="padding:8px 0; border-top:1px solid var(--line);">';
+  html += '<div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">';
+  html += kursAmpel(t);
+  html += '<strong>'+escapeHtml(t.anrede||'')+' '+escapeHtml(t.name||'')+', '+escapeHtml(t.vorname||'')+'</strong>';
+  html += '<span class="cardsub">'+escapeHtml(t.email||'')+' · '+escapeHtml(t.telefon||'')+'</span>';
+  if (t.bestanden) html += '<span class="tag" style="color:var(--petrol);">bestanden</span>';
+  html += '</div>';
+
+  html += '<div style="display:flex; gap:14px; flex-wrap:wrap; margin-top:6px; font-size:12px;">';
+  [['dokInfomail','Infomail'],['dokAntragPruefung','Antrag Prüfung'],['dokKopieFs','Kopie Führerschein'],['dokArzt','Ärztl. Bescheinigung'],['dokPassbild','Passbild']].forEach(function(pair){
+    html += '<label style="display:flex; align-items:center; gap:4px;"><input type="checkbox" class="chk-kurs-dok" data-id="'+t.id+'" data-feld="'+pair[0]+'" '+(t[pair[0]]?'checked':'')+'> '+pair[1]+'</label>';
+  });
+  html += '</div>';
+
+  html += '<div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:6px;">';
+  html += '<button class="btn-kurs-mail1" data-id="'+t.id+'" '+(t.mail1Versendet?'disabled title="bereits versendet"':'')+'>Mail 1: Buchungsbestätigung'+(t.mail1Versendet?' ✓':'')+'</button>';
+  html += '<button class="btn-kurs-mail2" data-id="'+t.id+'" '+(t.mail2Versendet?'disabled title="bereits versendet"':'')+'>Mail 2: Vorbereitung'+(t.mail2Versendet?' ✓':'')+'</button>';
+  html += '<button class="btn-kurs-mail3" data-id="'+t.id+'" '+(t.mailErinnerungVersendet?'disabled title="bereits versendet"':'')+'>Mail 3: Erinnerung'+(t.mailErinnerungVersendet?' ✓':'')+'</button>';
+  if (t.bestanden){
+    html += t.glueckwunschMailVersendet ? '<span class="tag" style="color:var(--petrol);">Glückwunschmail versendet</span>' :
+      '<button class="btn-kurs-glueckwunsch-vorschau" data-id="'+t.id+'">Glückwunschmail vorbereiten</button>';
+  }
+  html += '<button class="btn-kurs-teilnehmer-bearbeiten" data-id="'+t.id+'">Bearbeiten</button>';
+  html += '<button class="btn-kurs-teilnehmer-entfernen" data-id="'+t.id+'">Entfernen</button>';
+  html += '</div>';
+
+  if (kursUiState.editTeilnehmerId === t.id){
+    html += '<form class="form-kurs-teilnehmer-bearbeiten" data-id="'+t.id+'" style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">'+
+      '<input name="anrede" value="'+escapeHtml(t.anrede||'')+'" placeholder="Anrede" style="width:80px;">'+
+      '<input name="name" value="'+escapeHtml(t.name||'')+'" placeholder="Nachname" required>'+
+      '<input name="vorname" value="'+escapeHtml(t.vorname||'')+'" placeholder="Vorname" required>'+
+      '<input name="email" value="'+escapeHtml(t.email||'')+'" placeholder="E-Mail" type="email">'+
+      '<input name="telefon" value="'+escapeHtml(t.telefon||'')+'" placeholder="Telefon">'+
+      '<input name="anschrift" value="'+escapeHtml(t.anschrift||'')+'" placeholder="Anschrift" style="min-width:220px;">'+
+      '<button class="btn" type="submit">Speichern</button> <button type="button" class="btn-kurs-teilnehmer-bearbeiten-abbrechen" data-id="'+t.id+'">Abbrechen</button>'+
+      '</form>';
+  }
+
+  if (kursUiState.glueckwunschVorschau && kursUiState.glueckwunschVorschau.teilnehmerId === t.id){
+    var gv = kursUiState.glueckwunschVorschau;
+    html += '<div class="card" style="margin-top:8px; background:var(--bg-soft, #f6f6f6);"><div class="cardsub">Glückwunschmail-Vorschau – bitte prüfen, bevor sie verschickt wird:</div>'+
+      '<div><strong>An:</strong> '+escapeHtml(gv.to)+'</div>'+
+      '<div><strong>Betreff:</strong> '+escapeHtml(gv.subject)+'</div>'+
+      '<textarea class="kurs-glueckwunsch-vorschau-body" data-id="'+t.id+'" style="width:100%; min-height:220px; margin-top:6px;">'+escapeHtml(gv.body)+'</textarea>'+
+      '<div style="margin-top:8px; display:flex; gap:8px;">'+
+      '<button class="btn btn-kurs-glueckwunsch-senden" data-id="'+t.id+'">Mail jetzt senden</button>'+
+      '<button class="btn-kurs-glueckwunsch-abbrechen" data-id="'+t.id+'">Abbrechen</button></div></div>';
+  }
+
+  html += '</div>';
+  return html;
+}
+
+function renderKursTeilnehmerNeuForm(k){
+  return '<form class="form-kurs-teilnehmer-neu" data-kurs-id="'+k.id+'" style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">'+
+    '<input name="anrede" placeholder="Anrede" style="width:80px;">'+
+    '<input name="name" placeholder="Nachname" required>'+
+    '<input name="vorname" placeholder="Vorname" required>'+
+    '<input name="email" placeholder="E-Mail" type="email">'+
+    '<input name="telefon" placeholder="Telefon">'+
+    '<input name="anschrift" placeholder="Anschrift" style="min-width:220px;">'+
+    '<button class="btn" type="submit">Teilnehmer hinzufügen</button></form>';
+}
+
+function wireKursEvents(){
+  var btnErinnerung = document.getElementById('btn-kurs-erinnerung-jetzt');
+  if (btnErinnerung) btnErinnerung.addEventListener('click', function(){
+    btnErinnerung.disabled = true;
+    var label = btnErinnerung.textContent;
+    btnErinnerung.textContent = 'Prüft …';
+    fetch(SHEETS_API_URL, { method:'POST', body: JSON.stringify({ action:'kursErinnerungJetzt', pw: APP_PW }) })
+      .then(function(r){ return r.json(); }).then(function(data){
+        if (data && data.ok){
+          state.kursteilnehmer = data.kursteilnehmer;
+          showToast((data.versendet||0)+' Erinnerungsmail(s) versendet.');
+          renderKursverwaltung();
+        } else { showToast((data && data.error) || 'Fehler bei der Erinnerungsprüfung.', true); }
+      }).catch(function(){ showToast('Verbindung fehlgeschlagen.', true); })
+      .finally(function(){ btnErinnerung.disabled = false; btnErinnerung.textContent = label; });
+  });
+
+  var btnShop = document.getElementById('btn-kurs-shopmails-jetzt');
+  if (btnShop) btnShop.addEventListener('click', function(){
+    btnShop.disabled = true;
+    var label = btnShop.textContent;
+    btnShop.textContent = 'Verarbeitet …';
+    fetch(SHEETS_API_URL, { method:'POST', body: JSON.stringify({ action:'kursShopMailsJetzt', pw: APP_PW }) })
+      .then(function(r){ return r.json(); }).then(function(data){
+        if (data && data.ok){
+          state.kursteilnehmer = data.kursteilnehmer;
+          showToast((data.angelegt||0)+' neue Teilnehmer aus Shop-Bestellungen angelegt.');
+          renderKursverwaltung();
+        } else { showToast((data && data.error) || 'Fehler beim Verarbeiten der Shop-Mails.', true); }
+      }).catch(function(){ showToast('Verbindung fehlgeschlagen.', true); })
+      .finally(function(){ btnShop.disabled = false; btnShop.textContent = label; });
+  });
+
+  document.querySelectorAll('.btn-kurs-toggle').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var id = btn.getAttribute('data-id');
+      kursUiState.offenerKurs = (kursUiState.offenerKurs === id) ? null : id;
+      renderKursverwaltung();
+    });
+  });
+
+  document.querySelectorAll('.btn-kurs-bearbeiten').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      kursUiState.editKursId = btn.getAttribute('data-id');
+      renderKursverwaltung();
+    });
+  });
+  document.querySelectorAll('.btn-kurs-bearbeiten-abbrechen').forEach(function(btn){
+    btn.addEventListener('click', function(){ kursUiState.editKursId = null; renderKursverwaltung(); });
+  });
+  document.querySelectorAll('.form-kurs-bearbeiten').forEach(function(form){
+    form.addEventListener('submit', function(ev){
+      ev.preventDefault();
+      var id = form.getAttribute('data-id');
+      var fd = new FormData(form);
+      var k = state.kurstermine.find(function(x){ return x.id === id; });
+      if (!k) return;
+      k.name = fd.get('name').trim();
+      k.ort = (fd.get('ort')||'').trim();
+      k.kursbeginn = (fd.get('kursbeginn')||'').trim();
+      k.wochentag = (fd.get('wochentag')||'').trim();
+      k.uhrzeit = (fd.get('uhrzeit')||'').trim();
+      k.adresse = (fd.get('adresse')||'').trim();
+      k.googleMapsLink = (fd.get('googleMapsLink')||'').trim();
+      var preisVal = (fd.get('preis')||'').trim();
+      k.preis = preisVal === '' ? '' : Number(preisVal);
+      kursUiState.editKursId = null;
+      persistAndRefresh('Kurstermin gespeichert.');
+    });
+  });
+  document.querySelectorAll('.btn-kurs-entfernen').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var id = btn.getAttribute('data-id');
+      var hatTeilnehmer = (state.kursteilnehmer||[]).some(function(t){ return t.kursId === id; });
+      if (hatTeilnehmer && !confirm('Dieser Kurstermin hat noch Teilnehmer. Trotzdem löschen?')) return;
+      state.kurstermine = state.kurstermine.filter(function(k){ return k.id !== id; });
+      persistAndRefresh('Kurstermin entfernt.');
+    });
+  });
+
+  var formKursNeu = document.getElementById('form-kurs-neu');
+  if (formKursNeu) formKursNeu.addEventListener('submit', function(ev){
+    ev.preventDefault();
+    var fd = new FormData(ev.target);
+    var preisVal = (fd.get('preis')||'').trim();
+    state.kurstermine.push({
+      id: 'krs-' + uid(),
+      name: fd.get('name').trim(),
+      ort: (fd.get('ort')||'').trim(),
+      kursbeginn: (fd.get('kursbeginn')||'').trim(),
+      wochentag: (fd.get('wochentag')||'').trim(),
+      uhrzeit: (fd.get('uhrzeit')||'').trim(),
+      adresse: (fd.get('adresse')||'').trim(),
+      googleMapsLink: (fd.get('googleMapsLink')||'').trim(),
+      preis: preisVal === '' ? '' : Number(preisVal)
+    });
+    ev.target.reset();
+    persistAndRefresh('Kurstermin angelegt.');
+  });
+
+  document.querySelectorAll('.form-kurs-teilnehmer-neu').forEach(function(form){
+    form.addEventListener('submit', function(ev){
+      ev.preventDefault();
+      var kursId = form.getAttribute('data-kurs-id');
+      var fd = new FormData(form);
+      state.kursteilnehmer.push({
+        id: 'tn-' + uid(),
+        kursId: kursId,
+        anrede: (fd.get('anrede')||'').trim(),
+        name: fd.get('name').trim(),
+        vorname: fd.get('vorname').trim(),
+        email: (fd.get('email')||'').trim(),
+        telefon: (fd.get('telefon')||'').trim(),
+        anschrift: (fd.get('anschrift')||'').trim(),
+        pruefungSee: '', pruefungBinnen: '', praxis: '', zahlung: 0, rechnungsnummer: '',
+        dokInfomail: false, dokAntragPruefung: false, dokKopieFs: false, dokArzt: false, dokPassbild: false,
+        mail1Versendet: false, mail2Versendet: false, mailErinnerungVersendet: false,
+        bestanden: false, glueckwunschMailVersendet: false
+      });
+      persistAndRefresh('Teilnehmer hinzugefügt.');
+    });
+  });
+
+  document.querySelectorAll('.chk-kurs-dok').forEach(function(chk){
+    chk.addEventListener('change', function(){
+      var id = chk.getAttribute('data-id');
+      var feld = chk.getAttribute('data-feld');
+      var t = state.kursteilnehmer.find(function(x){ return x.id === id; });
+      if (!t) return;
+      t[feld] = chk.checked;
+      persistAndRefresh('Status aktualisiert.');
+    });
+  });
+
+  document.querySelectorAll('.btn-kurs-teilnehmer-bearbeiten').forEach(function(btn){
+    btn.addEventListener('click', function(){ kursUiState.editTeilnehmerId = btn.getAttribute('data-id'); renderKursverwaltung(); });
+  });
+  document.querySelectorAll('.btn-kurs-teilnehmer-bearbeiten-abbrechen').forEach(function(btn){
+    btn.addEventListener('click', function(){ kursUiState.editTeilnehmerId = null; renderKursverwaltung(); });
+  });
+  document.querySelectorAll('.form-kurs-teilnehmer-bearbeiten').forEach(function(form){
+    form.addEventListener('submit', function(ev){
+      ev.preventDefault();
+      var id = form.getAttribute('data-id');
+      var fd = new FormData(form);
+      var t = state.kursteilnehmer.find(function(x){ return x.id === id; });
+      if (!t) return;
+      t.anrede = (fd.get('anrede')||'').trim();
+      t.name = fd.get('name').trim();
+      t.vorname = fd.get('vorname').trim();
+      t.email = (fd.get('email')||'').trim();
+      t.telefon = (fd.get('telefon')||'').trim();
+      t.anschrift = (fd.get('anschrift')||'').trim();
+      kursUiState.editTeilnehmerId = null;
+      persistAndRefresh('Teilnehmer gespeichert.');
+    });
+  });
+  document.querySelectorAll('.btn-kurs-teilnehmer-entfernen').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var id = btn.getAttribute('data-id');
+      if (!confirm('Diesen Teilnehmer wirklich entfernen?')) return;
+      state.kursteilnehmer = state.kursteilnehmer.filter(function(t){ return t.id !== id; });
+      persistAndRefresh('Teilnehmer entfernt.');
+    });
+  });
+
+  ['mail1','mail2','mail3'].forEach(function(kind){
+    var actionMap = { mail1: 'kursMail1Versenden', mail2: 'kursMail2Versenden', mail3: 'kursMail3Versenden' };
+    document.querySelectorAll('.btn-kurs-'+kind).forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var id = btn.getAttribute('data-id');
+        btn.disabled = true;
+        var label = btn.textContent;
+        btn.textContent = 'Sende …';
+        fetch(SHEETS_API_URL, { method:'POST', body: JSON.stringify({ action: actionMap[kind], pw: APP_PW, teilnehmerId: id }) })
+          .then(function(r){ return r.json(); }).then(function(data){
+            if (data && data.ok){
+              state.kursteilnehmer = data.kursteilnehmer;
+              showToast('Mail versendet.');
+              renderKursverwaltung();
+            } else {
+              showToast((data && data.error) || 'Mail konnte nicht versendet werden.', true);
+              btn.disabled = false; btn.textContent = label;
+            }
+          }).catch(function(){ showToast('Verbindung fehlgeschlagen.', true); btn.disabled = false; btn.textContent = label; });
+      });
+    });
+  });
+
+  document.querySelectorAll('.btn-kurs-glueckwunsch-vorschau').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var id = btn.getAttribute('data-id');
+      btn.disabled = true;
+      var label = btn.textContent;
+      btn.textContent = 'Lädt …';
+      fetch(SHEETS_API_URL, { method:'POST', body: JSON.stringify({ action:'kursGlueckwunschMailVorschau', pw: APP_PW, teilnehmerId: id }) })
+        .then(function(r){ return r.json(); }).then(function(data){
+          if (data && data.ok){
+            kursUiState.glueckwunschVorschau = { teilnehmerId: id, to: data.to, subject: data.subject, body: data.body };
+            renderKursverwaltung();
+          } else { showToast((data && data.error) || 'Vorschau konnte nicht geladen werden.', true); }
+        }).catch(function(){ showToast('Verbindung fehlgeschlagen.', true); })
+        .finally(function(){ btn.disabled = false; btn.textContent = label; });
+    });
+  });
+  document.querySelectorAll('.btn-kurs-glueckwunsch-abbrechen').forEach(function(btn){
+    btn.addEventListener('click', function(){ kursUiState.glueckwunschVorschau = null; renderKursverwaltung(); });
+  });
+  document.querySelectorAll('.btn-kurs-glueckwunsch-senden').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var id = btn.getAttribute('data-id');
+      var textarea = document.querySelector('.kurs-glueckwunsch-vorschau-body[data-id="'+id+'"]');
+      var body = textarea ? textarea.value : kursUiState.glueckwunschVorschau.body;
+      btn.disabled = true;
+      fetch(SHEETS_API_URL, { method:'POST', body: JSON.stringify({ action:'kursGlueckwunschMailVersenden', pw: APP_PW, teilnehmerId: id, subject: kursUiState.glueckwunschVorschau.subject, body: body }) })
+        .then(function(r){ return r.json(); }).then(function(data){
+          if (data && data.ok){
+            state.kursteilnehmer = data.kursteilnehmer;
+            kursUiState.glueckwunschVorschau = null;
+            showToast('Glückwunschmail versendet.');
+            renderKursverwaltung();
+          } else { showToast((data && data.error) || 'Mail konnte nicht versendet werden.', true); btn.disabled = false; }
+        }).catch(function(){ showToast('Verbindung fehlgeschlagen.', true); btn.disabled = false; });
+    });
+  });
+}
+
 
 /* ============================================================================
    EINBAU-HINWEISE

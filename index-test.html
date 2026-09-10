@@ -3230,7 +3230,7 @@ return db - da;
       '<button class="btn-rechnung-uebersicht" data-tag="'+escapeHtml(tag)+'" style="float:right; font-weight:400;" onclick="event.stopPropagation();">IDs für Rechnung</button></button>';
     if (offen){
       html += '<div style="padding:0 12px 12px;">';
-      var auswahlAnzahl = Object.keys(praxisUiState.ausgewaehlt).filter(function(id){ return praxisUiState.ausgewaehlt[id]; }).length;
+      var auswahlAnzahl = Object.keys((praxisUiState && praxisUiState.ausgewaehlt) || {}).filter(function(id){ return praxisUiState.ausgewaehlt[id]; }).length;
       html += '<div style="margin-bottom:10px;"><button class="btn btn-glueckwunsch-bulk" data-tag="'+escapeHtml(tag)+'" '+(auswahlAnzahl?'':'disabled')+'>Glückwunschmail an Ausgewählte senden ('+auswahlAnzahl+')</button></div>';
       gruppe.forEach(function(t){ html += renderPraxisTeilnehmerZeile(t, standorte); });
       html += '</div>';
@@ -3249,7 +3249,7 @@ return db - da;
     '<input name="pruefungsdatum" type="date" title="Geplantes Prüfungsdatum (optional)">'+
     '<button class="btn" type="submit">Anlegen &amp; Termin vergeben</button></form>';
   direkt.forEach(function(t){ html += renderPraxisTeilnehmerZeile(t, standorte); });
-  var auswahlAnzahlDirekt = Object.keys(praxisUiState.ausgewaehlt).filter(function(id){ return praxisUiState.ausgewaehlt[id]; }).length;
+  var auswahlAnzahlDirekt = Object.keys((praxisUiState && praxisUiState.ausgewaehlt) || {}).filter(function(id){ return praxisUiState.ausgewaehlt[id]; }).length;
   html += '<div style="margin-top:10px;"><button class="btn btn-glueckwunsch-bulk" data-tag="__global__" '+(auswahlAnzahlDirekt?'':'disabled')+'>Glückwunschmail an Ausgewählte senden ('+auswahlAnzahlDirekt+')</button></div>';
   html += '</div>';
 

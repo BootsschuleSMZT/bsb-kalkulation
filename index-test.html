@@ -3160,7 +3160,7 @@ function downloadOfflineBackup(){
 }
 
 /* ============================= PRAXISTERMINE (TEST-Tab) ============================= */
-var praxisUiState = { offenerPruefungstag: null, mailVorschau: null };
+var praxisUiState = { offenerPruefungstag: null, mailVorschau: null, glueckwunschVorschau: null };
 
 function renderPraxistermine(){
   var liste = state.praxistermine || [];
@@ -3225,6 +3225,7 @@ function renderPraxistermine(){
     '<input name="vorname" placeholder="Vorname" required>'+
     '<input name="telefon" placeholder="Telefon" required>'+
     '<input name="email" type="email" placeholder="E-Mail" required>'+
+    '<input name="pruefungsdatum" type="date" title="Geplantes Prüfungsdatum (optional)">'+
     '<button class="btn" type="submit">Anlegen &amp; Termin vergeben</button></form>';
   direkt.forEach(function(t){ html += renderPraxisTeilnehmerZeile(t, standorte); });
   html += '</div>';
@@ -3238,12 +3239,18 @@ function renderPraxisTeilnehmerZeile(t, standorte){
   var html = '<div class="praxis-zeile" data-id="'+t.id+'" style="padding:8px 0; border-top:1px solid var(--line);">';
   html += '<div style="display:flex; align-items:center; gap:10px; flex-wrap:wrap;">';
   html += '<label style="display:flex; align-items:center; gap:6px;"><input type="checkbox" class="chk-angerufen" data-id="'+t.id+'" '+(t.angerufen?'checked':'')+'> angerufen</label>';
+  html += '<label style="display:flex; align-items:center; gap:6px;"><input type="checkbox" class="chk-bestanden" data-id="'+t.id+'" '+(t.bestanden?'checked':'')+'> bestanden</label>';
   html += '<strong>'+escapeHtml(t.nachname)+', '+escapeHtml(t.vorname)+'</strong>';
   html += '<span class="cardsub">'+escapeHtml(t.telefon||'')+' · '+escapeHtml(t.email||'')+(t.teilnehmerId?(' · ID '+escapeHtml(t.teilnehmerId)):'')+'</span>';
+  if (t.pruefungsdatum) html += '<span class="tag">Prüfung PA: '+escapeHtml(t.pruefungsdatum)+'</span>';
   if (terminGesetzt){
     html += '<span class="tag">Praxis: '+escapeHtml(t.praxisOrt)+' am '+escapeHtml(t.praxisDatum)+' '+escapeHtml(t.praxisUhrzeit)+' Uhr</span>';
     if (t.mailStatus === 'versendet') html += '<span class="tag" style="color:var(--petrol);">Mail versendet</span>';
     html += '<button class="btn-praxis-umbuchen" data-id="'+t.id+'">Datum ändern</button>';
+  }
+  if (t.bestanden){
+    if (t.glueckwunschMailStatus === 'versendet') html += '<span class="tag" style="color:var(--petrol);">Glückwunschmail versendet</span>';
+    else html += '<button class="btn-glueckwunsch-vorschau" data-id="'+t.id+'">Glückwunschmail vorbereiten</button>';
   }
   html += '</div>';
 
@@ -3267,6 +3274,17 @@ function renderPraxisTeilnehmerZeile(t, standorte){
       '<div style="margin-top:8px; display:flex; gap:8px;">'+
       '<button class="btn btn-mail-senden" data-id="'+t.id+'">Mail jetzt senden</button>'+
       '<button class="btn-mail-abbrechen" data-id="'+t.id+'">Abbrechen</button></div></div>';
+  }
+
+  if (praxisUiState.glueckwunschVorschau && praxisUiState.glueckwunschVorschau.teilnehmerId === t.id){
+    var gv = praxisUiState.glueckwunschVorschau;
+    html += '<div class="card" style="margin-top:8px; background:var(--bg-soft, #f6f6f6);"><div class="cardsub">Glückwunschmail-Vorschau – bitte prüfen, bevor sie verschickt wird:</div>'+
+      '<div><strong>An:</strong> '+escapeHtml(gv.to)+'</div>'+
+      '<div><strong>Betreff:</strong> '+escapeHtml(gv.subject)+'</div>'+
+      '<textarea class="glueckwunsch-vorschau-body" data-id="'+t.id+'" style="width:100%; min-height:220px; margin-top:6px;">'+escapeHtml(gv.body)+'</textarea>'+
+      '<div style="margin-top:8px; display:flex; gap:8px;">'+
+      '<button class="btn btn-glueckwunsch-senden" data-id="'+t.id+'">Mail jetzt senden</button>'+
+      '<button class="btn-glueckwunsch-abbrechen" data-id="'+t.id+'">Abbrechen</button></div></div>';
   }
 
   html += '</div>';
@@ -3383,6 +3401,60 @@ function wirePraxisEvents(){
     });
   });
 
+  document.querySelectorAll('.chk-bestanden').forEach(function(chk){
+    chk.addEventListener('change', function(){
+      var id = chk.getAttribute('data-id');
+      var vorherigerWert = !chk.checked;
+      chk.disabled = true;
+      fetch(SHEETS_API_URL, { method:'POST', body: JSON.stringify({ action:'praxisBestandenUmschalten', pw: APP_PW, teilnehmerId: id }) })
+        .then(function(r){ return r.json(); }).then(function(data){
+          if (data && data.ok){ state.praxistermine = data.praxistermine; renderPraxistermine(); }
+          else { chk.checked = vorherigerWert; chk.disabled = false; showToast('Konnte nicht gespeichert werden.', true); }
+        }).catch(function(){ chk.checked = vorherigerWert; chk.disabled = false; showToast('Verbindung fehlgeschlagen.', true); });
+    });
+  });
+
+  document.querySelectorAll('.btn-glueckwunsch-vorschau').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var id = btn.getAttribute('data-id');
+      btn.disabled = true;
+      var label = btn.textContent;
+      btn.textContent = 'Lädt …';
+      fetch(SHEETS_API_URL, { method:'POST', body: JSON.stringify({ action:'praxisGlueckwunschMailVorschau', pw: APP_PW, teilnehmerId: id }) })
+        .then(function(r){ return r.json(); }).then(function(data){
+          if (data && data.ok){
+            praxisUiState.glueckwunschVorschau = { teilnehmerId: id, to: data.to, subject: data.subject, body: data.body };
+            renderPraxistermine();
+          } else { btn.disabled = false; btn.textContent = label; showToast('Vorschau konnte nicht geladen werden.', true); }
+        }).catch(function(){ btn.disabled = false; btn.textContent = label; showToast('Verbindung fehlgeschlagen.', true); });
+    });
+  });
+
+  document.querySelectorAll('.btn-glueckwunsch-abbrechen').forEach(function(btn){
+    btn.addEventListener('click', function(){ praxisUiState.glueckwunschVorschau = null; renderPraxistermine(); });
+  });
+  document.querySelectorAll('.btn-glueckwunsch-senden').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var id = btn.getAttribute('data-id');
+      var textarea = document.querySelector('.glueckwunsch-vorschau-body[data-id="'+id+'"]');
+      var body = textarea ? textarea.value : praxisUiState.glueckwunschVorschau.body;
+      btn.disabled = true;
+      var label = btn.textContent;
+      btn.textContent = 'Sende …';
+      fetch(SHEETS_API_URL, {
+        method:'POST',
+        body: JSON.stringify({ action:'praxisGlueckwunschMailVersenden', pw: APP_PW, teilnehmerId: id, subject: praxisUiState.glueckwunschVorschau.subject, body: body })
+      }).then(function(r){ return r.json(); }).then(function(data){
+        if (data && data.ok){
+          state.praxistermine = data.praxistermine;
+          praxisUiState.glueckwunschVorschau = null;
+          showToast('Glückwunschmail versendet.');
+          renderPraxistermine();
+        } else { btn.disabled = false; btn.textContent = label; showToast('Mail konnte nicht versendet werden.', true); }
+      }).catch(function(){ btn.disabled = false; btn.textContent = label; showToast('Verbindung fehlgeschlagen.', true); });
+    });
+  });
+
   document.querySelectorAll('.form-praxis-termin').forEach(function(form){
     form.addEventListener('submit', function(ev){
       ev.preventDefault();
@@ -3456,9 +3528,11 @@ function wirePraxisEvents(){
     var submitBtn = ev.target.querySelector('button[type="submit"]');
     if (submitBtn && submitBtn.disabled) return; // schon in Bearbeitung – zweiten Klick ignorieren
     if (submitBtn) { submitBtn.disabled = true; submitBtn.dataset.label = submitBtn.textContent; submitBtn.textContent = 'Wird angelegt …'; }
+    var rawDatum = fd.get('pruefungsdatum');
+    var pruefungsdatum = rawDatum ? rawDatum.split('-').reverse().join('.') : '';
     fetch(SHEETS_API_URL, {
       method:'POST',
-      body: JSON.stringify({ action:'praxisSelbstzahlerAnlegen', pw: APP_PW, nachname: fd.get('nachname'), vorname: fd.get('vorname'), telefon: fd.get('telefon'), email: fd.get('email') })
+      body: JSON.stringify({ action:'praxisSelbstzahlerAnlegen', pw: APP_PW, nachname: fd.get('nachname'), vorname: fd.get('vorname'), telefon: fd.get('telefon'), email: fd.get('email'), pruefungsdatum: pruefungsdatum })
     }).then(function(r){ return r.json(); }).then(function(data){
       if (data && data.ok){ state.praxistermine = data.praxistermine; ev.target.reset(); showToast('Direktkunde angelegt.'); renderPraxistermine(); }
       else { if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = submitBtn.dataset.label; } showToast('Anlegen fehlgeschlagen.', true); }

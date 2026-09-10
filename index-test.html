@@ -3160,7 +3160,18 @@ function downloadOfflineBackup(){
 }
 
 /* ============================= PRAXISTERMINE (TEST-Tab) ============================= */
-var praxisUiState = { offenerPruefungstag: null, mailVorschau: null, glueckwunschVorschau: null };
+var praxisUiState = { offenerPruefungstag: null, mailVorschau: null, glueckwunschVorschau: null, ausgewaehlt: {} };
+
+// Parst ein Datum im Format TT.MM.JJJJ zu einem Zeitstempel fuer den
+// Sortiervergleich. Liefert null bei fehlendem/unbekanntem Format, damit
+// solche Eintraege gesondert (ans Ende) sortiert werden koennen.
+function parsePruefungsdatum(s){
+if (!s || s === '(ohne Datum)') return null;
+var parts = s.split('.');
+if (parts.length !== 3) return null;
+var t = new Date(Number(parts[2]), Number(parts[1]) - 1, Number(parts[0])).getTime();
+return isNaN(t) ? null : t;
+}
 
 function renderPraxistermine(){
   var liste = state.praxistermine || [];
@@ -3174,7 +3185,15 @@ function renderPraxistermine(){
     var key = t.pruefungsdatum || '(ohne Datum)';
     (pruefungstage[key] = pruefungstage[key] || []).push(t);
   });
-  var tageSortiert = Object.keys(pruefungstage).sort();
+  // Neuestes/zukunftigstes Pruefungsdatum zuerst (absteigend); Eintraege ohne
+// erkennbares Datum landen unabhaengig davon am Ende der Liste.
+var tageSortiert = Object.keys(pruefungstage).sort(function(a, b){
+var da = parsePruefungsdatum(a), db = parsePruefungsdatum(b);
+if (da === null && db === null) return a.localeCompare(b);
+if (da === null) return 1;
+if (db === null) return -1;
+return db - da;
+});
 
   var html = '<div class="pagehead"><h1>Praxistermine</h1>'+
     '<p>Praxisausbildung für BS1-/BS-Y-Teilnehmer und Direktkunden vergeben – Kalender "Praxis" und Bestätigungsmail laufen automatisch mit.</p></div>';
@@ -3211,6 +3230,8 @@ function renderPraxistermine(){
       '<button class="btn-rechnung-uebersicht" data-tag="'+escapeHtml(tag)+'" style="float:right; font-weight:400;" onclick="event.stopPropagation();">IDs für Rechnung</button></button>';
     if (offen){
       html += '<div style="padding:0 12px 12px;">';
+      var auswahlAnzahl = gruppe.filter(function(t){ return praxisUiState.ausgewaehlt[t.id]; }).length;
+      html += '<div style="margin-bottom:10px;"><button class="btn btn-glueckwunsch-bulk" data-tag="'+escapeHtml(tag)+'" '+(auswahlAnzahl?'':'disabled')+'>Glückwunschmail an Ausgewählte senden ('+auswahlAnzahl+')</button></div>';
       gruppe.forEach(function(t){ html += renderPraxisTeilnehmerZeile(t, standorte); });
       html += '</div>';
     }
@@ -3250,7 +3271,10 @@ function renderPraxisTeilnehmerZeile(t, standorte){
   }
   if (t.bestanden){
     if (t.glueckwunschMailStatus === 'versendet') html += '<span class="tag" style="color:var(--petrol);">Glückwunschmail versendet</span>';
-    else html += '<button class="btn-glueckwunsch-vorschau" data-id="'+t.id+'">Glückwunschmail vorbereiten</button>';
+    else {
+      html += '<label style="display:flex; align-items:center; gap:4px;" title="Für Sammelversand auswählen"><input type="checkbox" class="chk-glueckwunsch-auswahl" data-id="'+t.id+'" '+(praxisUiState.ausgewaehlt[t.id]?'checked':'')+'> auswählen</label>';
+      html += '<button class="btn-glueckwunsch-vorschau" data-id="'+t.id+'">Glückwunschmail vorbereiten</button>';
+    }
   }
   html += '</div>';
 
@@ -3427,6 +3451,41 @@ function wirePraxisEvents(){
             renderPraxistermine();
           } else { btn.disabled = false; btn.textContent = label; showToast('Vorschau konnte nicht geladen werden.', true); }
         }).catch(function(){ btn.disabled = false; btn.textContent = label; showToast('Verbindung fehlgeschlagen.', true); });
+    });
+  });
+
+  document.querySelectorAll('.chk-glueckwunsch-auswahl').forEach(function(chk){
+    chk.addEventListener('change', function(){
+      var id = chk.getAttribute('data-id');
+      if (chk.checked) praxisUiState.ausgewaehlt[id] = true; else delete praxisUiState.ausgewaehlt[id];
+      renderPraxistermine();
+    });
+  });
+
+  document.querySelectorAll('.btn-glueckwunsch-bulk').forEach(function(btn){
+    btn.addEventListener('click', function(){
+      var tag = btn.getAttribute('data-tag');
+      var gruppe = (state.praxistermine || []).filter(function(t){ return (t.pruefungsdatum || '(ohne Datum)') === tag; });
+      var ids = gruppe.filter(function(t){ return praxisUiState.ausgewaehlt[t.id]; }).map(function(t){ return t.id; });
+      if (!ids.length) return;
+      btn.disabled = true;
+      var label = btn.textContent;
+      btn.textContent = 'Sende …';
+      fetch(SHEETS_API_URL, {
+        method:'POST',
+        body: JSON.stringify({ action:'praxisGlueckwunschMailVersendenBulk', pw: APP_PW, teilnehmerIds: ids })
+      }).then(function(r){ return r.json(); }).then(function(data){
+        if (data && data.ok){
+          state.praxistermine = data.praxistermine;
+          ids.forEach(function(id){ delete praxisUiState.ausgewaehlt[id]; });
+          var erfolgreich = data.erfolgreich || 0, gesamt = data.gesamt || ids.length;
+          var fehlgeschlagen = data.fehlgeschlagen || [];
+          var msg = erfolgreich + ' von ' + gesamt + ' Glückwunschmails versendet';
+          if (fehlgeschlagen.length) msg += ', ' + fehlgeschlagen.length + ' fehlgeschlagen: ' + fehlgeschlagen.map(function(f){ return f.name ? (f.name + ' (' + f.grund + ')') : f; }).join(', ');
+          showToast(msg, fehlgeschlagen.length > 0);
+          renderPraxistermine();
+        } else { btn.disabled = false; btn.textContent = label; showToast('Sammelversand fehlgeschlagen.', true); }
+      }).catch(function(){ btn.disabled = false; btn.textContent = label; showToast('Verbindung fehlgeschlagen.', true); });
     });
   });
 

@@ -3610,9 +3610,8 @@ function wirePraxisEvents(){
    liegen in state.gfStunden und werden wie z. B. state.haendler ganz normal
    über den generischen Voll-Speicherstand (persistAndRefresh -> saveToSheets)
    mitgespeichert; ein eigener Backend-Endpunkt ist dafür nicht nötig. */
-var GF_PERSONEN = ['Lars', 'Nico'];
-
 function renderGfStunden(){
+  var GF_PERSONEN = ['Lars', 'Nico'];
   var liste = (state.gfStunden || []).slice().sort(function(a,b){
     if (a.datum === b.datum) return 0;
     return a.datum < b.datum ? 1 : -1;
